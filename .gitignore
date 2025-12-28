@@ -1,1 +1,4 @@
 .venv/xw
+models/
+mlruns/
+docs/

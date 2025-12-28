@@ -1,12 +1,18 @@
 [project]
 name = "finetune-embedding-norwegian"
 version = "0.1.0"
-description = "Add your description here"
+description = "Fine-tune Norwegian embedding models using triplet data with sentence-transformers"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "accelerate>=1.12.0",
     "datasets>=4.4.2",
+    "matplotlib>=3.10.8",
+    "mlflow>=3.8.1",
+    "pyyaml>=6.0.2",
+    "scipy>=1.16.3",
     "sentence-transformers>=5.2.0",
+    "tensorboard>=2.20.0",
     "torch>=2.9.1",
     "transformers>=4.57.3",
 ]

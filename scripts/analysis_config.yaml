@@ -1,0 +1,238 @@
+# ============================================================================
+# EMBEDDING QUALITY ANALYSIS CONFIGURATION
+# ============================================================================
+# This config controls the post-training analysis of embedding model quality.
+# Run after training completes to understand model performance and identify
+# areas for improvement.
+#
+# Usage:
+#   python scripts/analyze_embedding_quality.py --config scripts/analysis_config.yaml
+# ============================================================================
+
+# MODEL CONFIGURATION
+# ----------------------------------------------------------------------------
+model:
+  # SINGLE MODEL ANALYSIS
+  # Path to the trained model (local directory or HuggingFace Hub ID)
+  path: "models/norbert4-base-nli-norwegian-v2"
+  # path: "thivy/norbert4-base-nli-norwegian-v2"  # Alternative: Load from Hub
+
+  # MULTI-CHECKPOINT ANALYSIS
+  # Analyze multiple checkpoints to see training progression
+  # Set to null to analyze single model, or provide list of checkpoint paths
+  checkpoints: null
+  # checkpoints:
+  #   - "models/norbert4-base-nli-norwegian-v2/checkpoint-500"
+  #   - "models/norbert4-base-nli-norwegian-v2/checkpoint-1000"
+  #   - "models/norbert4-base-nli-norwegian-v2/checkpoint-1500"
+  #   - "models/norbert4-base-nli-norwegian-v2/checkpoint-2000"
+  #   - "models/norbert4-base-nli-norwegian-v2"  # Final model
+
+  # Auto-discover checkpoints from training directory
+  # If true, automatically finds all checkpoint-* directories
+  auto_discover_checkpoints: false
+  checkpoint_dir: "models/norbert4-base-nli-norwegian-v2"  # Only used if auto_discover=true
+
+  # Device to use for inference
+  device: "auto"
+
+# DATASET CONFIGURATION
+# ----------------------------------------------------------------------------
+dataset:
+  # Dataset to analyze
+  name: "Fremtind/all-nli-norwegian"
+
+  # Which split to analyze
+  split: "test"
+
+  # Column names
+  anchor_column: "anchor"
+  positive_column: "positive"
+  negative_column: "negative"
+
+  # Number of samples to analyze
+  # null = use entire test set (recommended for comprehensive analysis)
+  max_samples: null
+
+# ANALYSIS PARAMETERS
+# ----------------------------------------------------------------------------
+analysis:
+  # Batch size for encoding
+  batch_size: 128
+
+  # Random seed
+  seed: 42
+
+  # Which analyses to run
+  run_similarity_analysis: true
+  run_embedding_space_analysis: true
+  run_sample_impact_analysis: true  # NEW: Identify high-impact samples
+
+  # Similarity analysis
+  similarity:
+    compute_percentiles: true
+    percentiles: [5, 25, 50, 75, 95]
+    hard_negative_threshold: 0.7  # Negatives with sim > this are "hard"
+
+  # Embedding space
+  embedding_space:
+    variance_threshold: 0.90
+    compute_norm_stats: true
+    compute_isotropy: true
+
+  # SAMPLE IMPACT ANALYSIS (NEW)
+  # Identify which samples have the biggest effect on model performance
+  sample_impact:
+    # Enable sample-level analysis
+    enabled: true
+
+    # Number of top samples to report for each category
+    top_k: 100
+
+    # Categories to analyze:
+    # - Hard negatives: negative has high similarity to anchor
+    # - Easy positives: positive has very high similarity to anchor
+    # - Hard positives: positive has low similarity to anchor
+    # - Failure cases: positive_sim < negative_sim
+    # - Boundary cases: abs(positive_sim - negative_sim) < threshold
+    categories:
+      - "hard_negatives"
+      - "hard_positives"
+      - "failure_cases"
+      - "boundary_cases"
+
+    # Boundary case threshold (how close is "boundary")
+    boundary_threshold: 0.1
+
+    # Save detailed sample analysis to CSV
+    save_to_csv: true
+    csv_path: "sample_impact_analysis.csv"
+
+    # Log top samples to MLflow as artifacts
+    log_to_mlflow: true
+
+# OUTPUT CONFIGURATION
+# ----------------------------------------------------------------------------
+output:
+  # Base directory for all analysis outputs
+  output_dir: "models/norbert4-base-nli-norwegian-v2/analysis"
+
+  # Generate visualizations
+  generate_plots: true
+
+  # Plot settings
+  plots:
+    figsize: [16, 12]
+    dpi: 150
+    format: "png"
+    style: "seaborn-v0_8-darkgrid"
+
+    # Multi-checkpoint comparison plots
+    # Only used if analyzing multiple checkpoints
+    plot_checkpoint_comparison: true
+
+  # Generate markdown report
+  generate_report: true
+
+  # Report settings
+  report:
+    include_detailed_stats: true
+    include_recommendations: true
+    include_sample_impact: true  # NEW: Include sample impact analysis in report
+
+    # Comparison with previous runs
+    compare_with: null
+
+# LOGGING
+# ----------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  log_to_file: true
+  log_file: "analysis.log"  # Saved in output_dir
+
+# MLFLOW INTEGRATION
+# ----------------------------------------------------------------------------
+mlflow:
+  # Log all analysis results to MLflow
+  use_mlflow: true
+
+  # Experiment name (same as training for continuity)
+  experiment_name: "norwegian-embedding-training"
+
+  # Run name (auto-generated from model name if not set)
+  run_name: null
+
+  # Tags for organization
+  tags:
+    analysis_type: "post_training_quality"
+    model_version: "v2"
+    dataset_split: "test"
+
+  # What to log to MLflow
+  log_metrics: true        # Log summary metrics (separation, overlap, accuracy, etc.)
+  log_params: true         # Log analysis configuration
+  log_artifacts: true      # Log plots, reports, CSV files
+  log_sample_impact: true  # Log sample impact analysis results
+
+  # For multi-checkpoint analysis, log progression metrics
+  log_checkpoint_progression: true
+
+  # Link to training run (if available)
+  # Provides parent_run_id to connect analysis with training
+  parent_run_id: null  # Auto-detected if analyzing same model as training
+
+# THRESHOLDS FOR RECOMMENDATIONS
+# ----------------------------------------------------------------------------
+thresholds:
+  # Similarity separation (positive_mean - negative_mean)
+  good_separation: 0.30
+  excellent_separation: 0.50
+
+  # Distribution overlap
+  good_overlap: 0.20
+  excellent_overlap: 0.10
+
+  # Triplet accuracy
+  good_accuracy: 0.90
+  excellent_accuracy: 0.95
+
+  # Effective dimensionality ratio
+  good_dimensionality: 0.50
+  excellent_dimensionality: 0.70
+
+  # Embedding norm coefficient of variation
+  good_norm_cv: 0.30
+  excellent_norm_cv: 0.20
+
+  # Sample impact thresholds
+  sample_impact:
+    # Failure rate: % of samples where positive_sim < negative_sim
+    acceptable_failure_rate: 0.05  # 5%
+    concerning_failure_rate: 0.10  # 10%
+
+    # Hard negative rate: % of negatives with sim > threshold
+    acceptable_hard_negative_rate: 0.10  # 10%
+    concerning_hard_negative_rate: 0.20  # 20%
+
+# MULTI-CHECKPOINT COMPARISON
+# ----------------------------------------------------------------------------
+# Settings specific to comparing multiple checkpoints
+checkpoint_comparison:
+  # Metrics to track across checkpoints
+  track_metrics:
+    - "separation"
+    - "overlap"
+    - "accuracy"
+    - "effective_dimension"
+    - "embedding_norm_mean"
+    - "hard_negative_rate"
+    - "failure_rate"
+
+  # Plot training progression
+  plot_progression: true
+
+  # Identify best checkpoint based on metric
+  select_best_by: "accuracy"  # Options: "separation", "accuracy", "overlap"
+
+  # Log comparison table to MLflow
+  log_comparison_table: true
