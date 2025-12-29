@@ -484,5 +484,34 @@ class EmbeddingTrainer:
             raise ValueError("model_id must be provided")
 
         logger.info(f"\nPushing model to HuggingFace Hub: {model_id}")
-        self.model.push_to_hub(model_id, token=token)
-        logger.info("✓ Model pushed to Hub successfully!")
+        try:
+            # First try with exist_ok parameter (newer versions of sentence-transformers)
+            try:
+                self.model.push_to_hub(model_id, token=token, exist_ok=True)
+                logger.info("✓ Model pushed to Hub successfully!")
+                return
+            except TypeError:
+                # exist_ok not supported, try without it
+                pass
+
+            # Try regular push
+            self.model.push_to_hub(model_id, token=token)
+            logger.info("✓ Model pushed to Hub successfully!")
+
+        except Exception as e:
+            # If the error is about repo already existing, upload directly
+            if "already created this model repo" in str(e) or "409" in str(e):
+                logger.warning(f"Repository {model_id} already exists, updating instead...")
+                from huggingface_hub import HfApi
+                api = HfApi()
+                api.upload_folder(
+                    folder_path=self.config.training.output_dir,
+                    repo_id=model_id,
+                    repo_type="model",
+                    token=token,
+                    ignore_patterns=["checkpoint-*", "logs/*"],  # Don't upload checkpoints/logs
+                )
+                logger.info("✓ Model updated on Hub successfully!")
+            else:
+                logger.error(f"Failed to push to hub: {e}")
+                raise

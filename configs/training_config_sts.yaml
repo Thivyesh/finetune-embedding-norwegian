@@ -1,0 +1,252 @@
+# ============================================================================
+# STS FINE-TUNING CONFIGURATION
+# ============================================================================
+# This config is for fine-tuning the V1 NLI-trained model on the Norwegian
+# STS (Semantic Textual Similarity) dataset to improve similarity predictions.
+#
+# TRAINING PIPELINE:
+# Stage 1: NLI training (569K triplets) → V1 model ✓ COMPLETED (95.52%)
+# Stage 2: STS fine-tuning (2.2K pairs) → This config
+# Stage 3: RAG domain data (future)
+#
+# WHAT IS STS FINE-TUNING?
+# After training on NLI (classification: similar/different), we fine-tune on
+# STS data with continuous similarity scores (0-5 scale). This teaches the
+# model to predict fine-grained similarity, not just binary similar/dissimilar.
+#
+# WHY FINE-TUNE V1 (NOT V3)?
+# V1 achieved 95.52% with simple linear scheduler. V3's cosine scheduler
+# optimization didn't improve results. Starting from V1's proven checkpoint.
+# ============================================================================
+
+# MODEL CONFIGURATION
+# ----------------------------------------------------------------------------
+model:
+  # Start from V1's trained checkpoint (95.52% NLI accuracy)
+  name: "models/norbert4-base-nli-norwegian"  # Local V1 checkpoint
+  # Alternative: Use from HuggingFace Hub
+  # name: "thivy/norbert4-base-nli-norwegian-v1"
+
+  # Maximum sequence length - match V1's setting
+  max_seq_length: 128
+
+# DATASET CONFIGURATION
+# ----------------------------------------------------------------------------
+dataset:
+  # Norwegian STS dataset (small but high-quality)
+  name: "tollefj/sts-concatenated-NOB"
+
+  # Dataset split configuration
+  # NOTE: This dataset only has 'train' and 'test' splits
+  train_split: "train"      # 2,206 samples
+  test_split: "test"        # 1,379 samples
+  eval_split: null          # Will create from train data
+
+  # Column names in STS dataset
+  sentence1_column: "sentence1"  # First sentence
+  sentence2_column: "sentence2"  # Second sentence
+  score_column: "score"          # Similarity score (0-5)
+
+  # Create dev split from training data since dataset doesn't have one
+  create_dev_split: true
+  dev_split_ratio: 0.15  # 15% of 2,206 = ~331 dev samples, ~1,875 train
+
+  # No sample limiting - dataset is already small
+  max_train_samples: null
+  max_eval_samples: null
+
+# TRAINING HYPERPARAMETERS
+# ----------------------------------------------------------------------------
+training:
+  # OUTPUT DIRECTORY
+  output_dir: "models/norbert4-base-sts-norwegian-v1"
+
+  # LOSS FUNCTION OPTIONS
+  # Option 1: CosineSimilarityLoss - uses the similarity scores (0-5)
+  #   - True regression task, learns fine-grained similarity
+  #   - Recommended for STS fine-tuning
+  # Option 2: MultipleNegativesRankingLoss - treats all as positive pairs
+  #   - Ignores scores, treats all pairs as similar
+  #   - Simpler but wastes score information
+  loss_function: "CosineSimilarityLoss"  # Use scores for regression
+
+  # BATCH SIZE
+  # Research shows batch size 16-32 is standard for sentence transformer fine-tuning
+  # MYTH BUSTED: Small datasets don't require smaller batches!
+  # Larger batch = more negatives for MultipleNegativesRankingLoss = better signal
+  # Batch 32 = ~58 steps per epoch (with 1,875 train samples)
+  # Match V1's proven batch size for consistency
+  per_device_train_batch_size: 32  # Same as V1 - research-backed
+  per_device_eval_batch_size: 64
+
+  # TRAINING DURATION
+  # More epochs needed for small dataset (vs 1 epoch for 569K NLI data)
+  # Research (2024-2025): 3-5 epochs optimal for STS fine-tuning on <10K samples
+  # With 1,875 samples × 4 epochs = ~234 steps total
+  num_train_epochs: 4  # Standard for small STS datasets
+
+  # LEARNING RATE
+  # Research consensus (2024-2025): 2e-5 is STANDARD for sentence transformer fine-tuning
+  # Sources: HuggingFace, Sentence-Transformers docs, Weaviate guide
+  # Don't reduce LR just because dataset is small - increase epochs instead!
+  # Small datasets benefit from same LR as large ones with proper regularization
+  learning_rate: 2.0e-5  # Standard for fine-tuning (not 5e-6!)
+
+  # WARMUP
+  # Standard 10% warmup (same as V1 and research recommendations)
+  # 10% of ~234 steps = ~23 warmup steps
+  warmup_ratio: 0.10
+
+  # WEIGHT DECAY
+  # Same as V1 - standard for transformers
+  weight_decay: 0.01
+
+  # EVALUATION STRATEGY
+  # Evaluate more frequently due to small dataset
+  eval_strategy: "steps"
+  eval_steps: 50  # Evaluate every 50 steps (~2-3 times per epoch)
+
+  # SAVING STRATEGY
+  save_strategy: "steps"
+  save_steps: 50           # Save every 50 steps
+  save_total_limit: 3      # Keep only 3 best checkpoints
+  load_best_model_at_end: true
+
+  # LOGGING
+  logging_steps: 25  # More frequent logging for small dataset
+  logging_dir: "models/norbert4-base-sts-norwegian-v1/logs"
+
+  # PERFORMANCE OPTIMIZATIONS
+  # Match V1's settings
+  fp16: false  # MPS doesn't support fp16
+  bf16: true   # Use bfloat16 on Apple Silicon
+
+  # No gradient accumulation needed (small batch size is fine)
+  gradient_accumulation_steps: 1
+
+  # REPRODUCIBILITY
+  seed: 42
+
+  # DATA LOADING
+  # Set to 0 on Apple Silicon to avoid multiprocessing issues
+  dataloader_num_workers: 4
+
+# EVALUATION CONFIGURATION
+# ----------------------------------------------------------------------------
+evaluation:
+  # For STS, we measure how well predicted similarity matches actual scores
+  # The evaluator will compute cosine similarity and compare to ground truth
+  metric_for_best_model: "eval_cosine_pearson"  # Pearson correlation with scores
+
+  # Higher correlation is better
+  greater_is_better: true
+
+  # Batch size for evaluation
+  batch_size: 32
+
+# EXPERIMENT TRACKING
+# ----------------------------------------------------------------------------
+experiment_tracking:
+  # MLflow experiment tracking
+  use_mlflow: true
+  mlflow_experiment_name: "norwegian-embedding-training"
+  mlflow_run_name: "v1-sts-finetuning"  # Clear naming: V1 + STS fine-tune
+  mlflow_tracking_uri: null  # Uses local ./mlruns
+  mlflow_tags:
+    model_type: "embedding"
+    language: "norwegian"
+    dataset: "sts-concatenated-NOB"
+    base_model: "norbert4-base-nli-norwegian-v1"
+    training_stage: "stage2-sts"
+
+  # TensorBoard and MLflow tracking
+  report_to: ["tensorboard", "mlflow"]
+
+# LEARNING RATE SCHEDULER
+# ----------------------------------------------------------------------------
+lr_scheduler:
+  # KEEP IT SIMPLE - V1's linear scheduler worked best!
+  # Default: linear decay to zero (what V1 used)
+  # No need to specify type - will use HuggingFace default
+
+  # If you want to experiment, uncomment one of these:
+
+  # Option 1: Cosine (smooth decay)
+  # type: "cosine"
+
+  # Option 2: Constant with warmup (stable LR after warmup)
+  # type: "constant_with_warmup"
+
+  # Option 3: Polynomial with slower decay
+  # type: "polynomial"
+  # power: 0.5
+  # lr_end: 1.0e-6
+
+# ADVANCED OPTIONS
+# ----------------------------------------------------------------------------
+advanced:
+  # Push to HuggingFace Hub
+  push_to_hub: true
+  hub_model_id: "thivy/norbert4-base-sts-norwegian-v1"
+  hub_token: null  # Will use HF_TOKEN environment variable
+  hub_strategy: "checkpoint"  # Push every checkpoint
+  hub_private_repo: false
+
+  # Resume from checkpoint if interrupted
+  resume_from_checkpoint: null
+
+# COMPUTE CONFIGURATION
+# ----------------------------------------------------------------------------
+compute:
+  # Auto-detect device (MPS on Apple Silicon)
+  device: "auto"
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. Wait for V3 training to complete
+#
+# 2. Run STS fine-tuning on V1:
+#    python train.py --config configs/training_config_sts.yaml
+#
+# 3. Expected results:
+#    - Training: ~351 steps (3 epochs × 117 steps)
+#    - Time: ~10-15 minutes on M4 Pro Max
+#    - Metric: Pearson correlation with ground-truth scores
+#    - Expected: 0.85-0.90 correlation (research baseline)
+#
+# 4. Evaluation:
+#    python evaluate.py --model models/norbert4-base-sts-norwegian-v1
+#
+# 5. Next steps:
+#    - Fine-tune on RAG domain data (see docs/rag_dataset_creation_guide.md)
+#    - Expected 5-10% retrieval improvement for domain-specific tasks
+#
+# ============================================================================
+# KEY DIFFERENCES FROM NLI TRAINING
+# ============================================================================
+#
+# NLI Training (Stage 1 - V1):
+# - Dataset: 569K triplets (anchor, positive, negative)
+# - Loss: MultipleNegativesRankingLoss
+# - Task: Learn to distinguish similar/dissimilar
+# - Epochs: 1 (large dataset)
+# - LR: 2.0e-5 (training from base model)
+# - Steps: 17,387
+#
+# STS Fine-tuning (Stage 2 - This config):
+# - Dataset: 2.2K pairs (sentence1, sentence2, score)
+# - Loss: CosineSimilarityLoss (regression)
+# - Task: Predict fine-grained similarity (0-5)
+# - Epochs: 3 (small dataset, fine-tuning)
+# - LR: 5.0e-6 (fine-tuning, not training)
+# - Steps: ~351
+#
+# WHY STS AFTER NLI?
+# 1. NLI teaches binary similarity (similar vs different)
+# 2. STS teaches fine-grained similarity (how similar?)
+# 3. This improves semantic search and ranking quality
+# 4. Small STS dataset won't overfit thanks to NLI foundation
+#
+# ============================================================================
