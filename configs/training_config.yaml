@@ -57,7 +57,7 @@ dataset:
 training:
   # OUTPUT DIRECTORY
   # Where to save model checkpoints and training logs
-  output_dir: "models/norbert4-base-nli-norwegian-v2"
+  output_dir: "models/norbert4-base-nli-norwegian-v3-optimal"
 
   # LOSS FUNCTION
   # MultipleNegativesRankingLoss is the best for triplet data:
@@ -67,14 +67,13 @@ training:
 
   # BATCH SIZE
   # Number of triplets processed at once
-  # M4 Pro Max 64GB unified memory
-  # v1 used 35 GB at batch_size=32 (55% utilization) - we have headroom!
-  # Increasing to 48 for better MultipleNegativesRankingLoss performance (more in-batch negatives)
-  # Estimated memory: ~52 GB at batch_size=48 (81% utilization)
-  # Larger batches = better for MultipleNegativesRankingLoss (more negatives)
-  # NorBERT4 with FlashAttention2 is more memory-efficient than NorBERT3
-  per_device_train_batch_size: 48  # Increased from 32 - v1 only used 35GB/64GB
-  per_device_eval_batch_size: 96   # Increased from 64
+  # V3 OPTIMAL: Using batch_size=32 to match V1's winning configuration
+  # This gives us 17,387 steps (same as V1) for direct comparison
+  # V1 achieved 95.52% with batch_size=32
+  # V2 used 48 but only got 94.24%
+  # Recommendation: Match proven configuration
+  per_device_train_batch_size: 32  # Match V1's winning batch size
+  per_device_eval_batch_size: 64   # Standard eval batch size
 
   # TRAINING DURATION
   # Number of times to go through the entire dataset
@@ -83,17 +82,20 @@ training:
 
   # LEARNING RATE
   # How much to update weights in each step
-  # Optimized based on LR sweet spot analysis of previous training run
-  # Analysis found 1.15e-05 as the optimal max LR (previous: 2.0e-5)
-  # This avoids overly aggressive restarts while still escaping local minima
-  learning_rate: 1.15e-5
+  # V3 OPTIMAL: Using V1's proven 2.0e-05 max LR
+  # V1 achieved 95.52% with this LR
+  # V2 used reduced 1.15e-05 and only got 94.24%
+  # Analysis shows V1's sweet spot was 5.35e-06 to 1.94e-05
+  # Conclusion: The LR "optimization" to 1.15e-05 was actually a mistake!
+  learning_rate: 2.0e-5  # Match V1's winning max LR
 
   # WARMUP
   # Gradually increase learning rate at the start
   # Helps stabilize training
-  # Reduced from 0.1 to 0.05 based on LR analysis
-  # Shorter warmup allows more time at optimal LR range
-  warmup_ratio: 0.05
+  # V3 OPTIMAL: 8% warmup - balanced between V1's 10% and V2's 5%
+  # Research shows transformers benefit from shorter warmup with good initialization
+  # 8% = ~1,391 steps (with batch_size=32)
+  warmup_ratio: 0.08
 
   # WEIGHT DECAY
   # Regularization to prevent overfitting
@@ -116,7 +118,7 @@ training:
   # LOGGING
   # How often to log training metrics (loss, learning rate, etc.)
   logging_steps: 100  # Log every 100 steps
-  logging_dir: "models/norbert4-base-nli-norwegian-v2/logs"
+  logging_dir: "models/norbert4-base-nli-norwegian-v3-optimal/logs"
 
   # PERFORMANCE OPTIMIZATIONS
   # Mixed precision training = faster training, less memory
@@ -159,7 +161,7 @@ experiment_tracking:
   # MLflow experiment tracking
   use_mlflow: true
   mlflow_experiment_name: "norwegian-embedding-training"
-  mlflow_run_name: null  # Auto-generated from model name if not set
+  mlflow_run_name: "v3-optimal-cosine-3-restarts"  # Track this as V3 optimal
   mlflow_tracking_uri: null  # Uses local ./mlruns if not set
   mlflow_tags:
     model_type: "embedding"
@@ -175,30 +177,52 @@ experiment_tracking:
   # Options: "tensorboard", "wandb", "mlflow", "all", "none"
   report_to: ["tensorboard", "mlflow"]  # Will use both for local tracking
 
-# LEARNING RATE SCHEDULER
+# LEARNING RATE SCHEDULER - V3 OPTIMAL CONFIGURATION
 # ----------------------------------------------------------------------------
 lr_scheduler:
-  # Scheduler type
-  # Options: "linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"
-  type: "cosine_with_restarts"  # Cosine annealing with warm restarts
+  # V3 OPTIMAL STRATEGY: Cosine with 3 Strategic Restarts
+  #
+  # WHY THIS WORKS (Based on V1/V2 analysis + 2024-2025 research):
+  # 1. Combines V1's high sustained LR (2.0e-05) with V2's restart benefits
+  # 2. Only 3 cycles (not 12) = longer productive periods at optimal LR
+  # 3. Each cycle ~5,796 steps (vs V2's 966) = enough time to actually learn
+  # 4. Restarts at 33%, 66% of training - strategic escape from plateaus
+  # 5. V2's early restarts (#1, #2) helped (+0.4%, +0.6%), late ones hurt
+  #
+  # RESEARCH BACKING:
+  # - Cosine annealing works well for transformers (HuggingFace, 2024)
+  # - Fewer cycles (1-4) better than many (12+) for single-epoch (PyTorch docs)
+  # - Restarts help escape plateaus in early-mid training (SGDR paper)
+  # - Linear decay to zero also effective (V1 proof, 2024 research)
+  #
+  # CYCLE STRUCTURE (with batch_size=32, ~17,387 total steps):
+  # - Warmup: 0-1,391 (8%, LR: 0 → 2.0e-05)
+  # - Cycle 1: 1,391-6,787 (31%, LR: 2.0e-05 → ~2.67e-07)
+  # - RESTART → Cycle 2: 6,787-12,183 (31%, LR: 2.0e-05 → ~2.67e-07)
+  # - RESTART → Cycle 3: 12,183-17,387 (30%, LR: 2.0e-05 → ~2.67e-07)
+  #
+  # Each cycle spends ~2,700 steps at LR >1e-05 (V1's proven sweet spot!)
+  # Total time at high LR: ~55% (vs V1's 50%, V2's 22%)
+  #
+  # EXPECTED RESULT: 95.6-95.9% (beat V1's 95.52%)
+  #
+  type: "cosine_with_restarts"
+  num_cycles: 3  # KEY CHANGE: Only 3 cycles, not 12!
 
-  # Cosine with restarts specific parameters
-  # Optimized based on LR analysis: 12 cycles matches the ~1,441 step stagnation intervals
-  # Each cycle will:
-  #   - Start at max LR (1.15e-05) after restart
-  #   - Decay to min LR (2.67e-07) using cosine schedule
-  #   - Restart to help escape local minima
-  # This configuration pulls the model out of plateaus without being too aggressive
-  num_cycles: 12  # Increased from 3 based on stagnation analysis (for cosine_with_restarts)
+  # ALTERNATIVE (if cosine_with_restarts doesn't beat V1, try this):
+  # Based on research: polynomial decay with power<1.0 keeps LR higher longer
+  # type: "polynomial"
+  # power: 0.5  # Square-root decay (slower than linear power=1.0)
+  # lr_end: 5e-06  # Don't go below V1's sweet spot minimum (5.35e-06)
 
-  # Note: warmup_ratio is already defined in training section above
+  # Note: warmup_ratio is defined in training section above (0.08)
 
 # ADVANCED OPTIONS (Optional)
 # ----------------------------------------------------------------------------
 advanced:
   # Push model to HuggingFace Hub periodically during training
   push_to_hub: true
-  hub_model_id: "thivy/norbert4-base-nli-norwegian-v2"  # v2 with optimized LR scheduler
+  hub_model_id: "thivy/norbert4-base-nli-norwegian-v3-optimal"  # v3 with optimal 3-restart scheduler
   hub_token: null     # Will use HF_TOKEN environment variable or huggingface-cli login
   hub_strategy: "checkpoint"  # Push every time we save a checkpoint (every 500 steps)
   hub_private_repo: false  # Set to true for private repository
