@@ -1,0 +1,245 @@
+# ============================================================================
+# EMBEDDING MODEL FINE-TUNING CONFIGURATION
+# ============================================================================
+# This config controls all aspects of fine-tuning a Norwegian embedding model
+# using triplet data (anchor, positive, negative sentences).
+#
+# WHAT IS AN EMBEDDING MODEL?
+# An embedding model converts text into numerical vectors (embeddings) where
+# semantically similar texts have similar vectors. This is crucial for tasks
+# like semantic search, clustering, and retrieval.
+#
+# WHAT IS TRIPLET TRAINING?
+# - Anchor: A reference sentence
+# - Positive: A sentence similar to the anchor (should be close in vector space)
+# - Negative: A sentence different from the anchor (should be far in vector space)
+# The model learns to pull positives closer and push negatives farther away.
+# ============================================================================
+
+# MODEL CONFIGURATION
+# ----------------------------------------------------------------------------
+model:
+  # The base model to fine-tune. Using NorBERT4 - the Norwegian equivalent of ModernBERT.
+  # NorBERT4 has modern architecture (FlashAttention2, long context) and was proven by Fremtind
+  # to achieve 94.7% accuracy on this exact dataset.
+  name: "ltg/norbert4-base"  # 149M params - v1 achieved 95.52% accuracy, now testing v2 with optimized LR
+  # name: "ltg/norbert4-large"  # 360M params - 2.42x larger, will train after validating LR on base
+  # name: "ltg/norbert3-base"  # Alternative: Older architecture, no proven embedding examples
+  # name: "NbAiLab/nb-bert-base"  # Alternative: 2021 tech, older training data
+
+  # Maximum sequence length (in tokens). Longer sequences are truncated.
+  # 128 is good for short sentences, 256-512 for longer documents.
+  max_seq_length: 128
+
+# DATASET CONFIGURATION
+# ----------------------------------------------------------------------------
+dataset:
+  # HuggingFace dataset to use for training
+  name: "Fremtind/all-nli-norwegian"
+
+  # Dataset split configuration
+  train_split: "train"      # Split used for training (569K samples)
+  eval_split: "dev"         # Split used for evaluation during training
+  test_split: "test"        # Split used for final testing
+
+  # Column names in the dataset (Fremtind dataset uses these names)
+  anchor_column: "anchor"      # The reference sentence
+  positive_column: "positive"  # The similar sentence
+  negative_column: "negative"  # The dissimilar sentence
+
+  # Optional: Use a subset for faster experimentation
+  # Set to null to use the full dataset
+  max_train_samples: null  # e.g., 10000 for quick testing
+  max_eval_samples: null   # e.g., 1000 for quick testing
+
+# TRAINING HYPERPARAMETERS
+# ----------------------------------------------------------------------------
+training:
+  # OUTPUT DIRECTORY
+  # Where to save model checkpoints and training logs
+  output_dir: "models/norbert4-base-nli-norwegian-v3-optimal"
+
+  # LOSS FUNCTION
+  # MultipleNegativesRankingLoss is the best for triplet data:
+  # - Treats other positives in the batch as additional negatives (efficient!)
+  # - Works well with large batch sizes
+  loss_function: "MultipleNegativesRankingLoss"
+
+  # BATCH SIZE
+  # Number of triplets processed at once
+  # V3 OPTIMAL: Using batch_size=32 to match V1's winning configuration
+  # This gives us 17,387 steps (same as V1) for direct comparison
+  # V1 achieved 95.52% with batch_size=32
+  # V2 used 48 but only got 94.24%
+  # Recommendation: Match proven configuration
+  per_device_train_batch_size: 32  # Match V1's winning batch size
+  per_device_eval_batch_size: 64   # Standard eval batch size
+
+  # TRAINING DURATION
+  # Number of times to go through the entire dataset
+  # 1 epoch is often enough for large datasets (500K+ samples)
+  num_train_epochs: 1
+
+  # LEARNING RATE
+  # How much to update weights in each step
+  # V3 OPTIMAL: Using V1's proven 2.0e-05 max LR
+  # V1 achieved 95.52% with this LR
+  # V2 used reduced 1.15e-05 and only got 94.24%
+  # Analysis shows V1's sweet spot was 5.35e-06 to 1.94e-05
+  # Conclusion: The LR "optimization" to 1.15e-05 was actually a mistake!
+  learning_rate: 2.0e-5  # Match V1's winning max LR
+
+  # WARMUP
+  # Gradually increase learning rate at the start
+  # Helps stabilize training
+  # V3 OPTIMAL: 8% warmup - balanced between V1's 10% and V2's 5%
+  # Research shows transformers benefit from shorter warmup with good initialization
+  # 8% = ~1,391 steps (with batch_size=32)
+  warmup_ratio: 0.08
+
+  # WEIGHT DECAY
+  # Regularization to prevent overfitting
+  # 0.01 is standard for transformer models
+  weight_decay: 0.01
+
+  # EVALUATION STRATEGY
+  # When to evaluate the model during training
+  # "steps" = evaluate every N steps, "epoch" = evaluate after each epoch
+  eval_strategy: "steps"
+  eval_steps: 500  # Evaluate every 500 training steps
+
+  # SAVING STRATEGY
+  # When to save model checkpoints
+  save_strategy: "steps"
+  save_steps: 500          # Save every 500 steps
+  save_total_limit: 3      # Keep only the 3 best checkpoints (saves disk space)
+  load_best_model_at_end: true  # Load the best checkpoint at the end
+
+  # EARLY STOPPING
+  # Stop training when validation metric stops improving
+  # Helps prevent overfitting and saves time when model has converged
+  # Note: metric_for_best_model is defined in evaluation section below
+  early_stopping_patience: 5  # Stop if no improvement for 5 evaluations (5 × 500 steps = 2,500 steps)
+  early_stopping_threshold: 0.0001  # Minimum improvement to count as better (0.01%)
+
+  # LOGGING
+  # How often to log training metrics (loss, learning rate, etc.)
+  logging_steps: 100  # Log every 100 steps
+  logging_dir: "models/norbert4-base-nli-norwegian-v3-optimal/logs"
+
+  # PERFORMANCE OPTIMIZATIONS
+  # Mixed precision training = faster training, less memory
+  # bfloat16 is better than fp16 for training stability (wider dynamic range)
+  # NorBERT4 with FlashAttention2 benefits from mixed precision
+  fp16: false  # MPS doesn't support fp16 autocast
+  bf16: true   # Use bfloat16 instead - supported on MPS and more stable!
+
+  # Gradient accumulation = simulate larger batch sizes
+  # Effective batch size = per_device_batch_size * gradient_accumulation_steps
+  gradient_accumulation_steps: 1
+
+  # REPRODUCIBILITY
+  # Random seed for reproducible results
+  seed: 42
+
+  # DATA LOADING
+  # Number of CPU workers for loading data
+  # More workers = faster data loading (but uses more CPU)
+  # NOTE: Automatically set to 0 on Apple Silicon (MPS) to avoid multiprocessing errors
+  dataloader_num_workers: 4
+
+# EVALUATION CONFIGURATION
+# ----------------------------------------------------------------------------
+evaluation:
+  # Metric to use for selecting the best model
+  # For embeddings, we typically use the evaluator's main metric
+  metric_for_best_model: "eval_cosine_accuracy"
+
+  # Whether higher metric values are better
+  greater_is_better: true
+
+  # Batch size for evaluation
+  # Can be larger than training batch size since we don't need gradients
+  batch_size: 64
+
+# EXPERIMENT TRACKING
+# ----------------------------------------------------------------------------
+experiment_tracking:
+  # MLflow experiment tracking
+  use_mlflow: true
+  mlflow_experiment_name: "norwegian-embedding-training"
+  mlflow_run_name: "v3-optimal-cosine-3-restarts"  # Track this as V3 optimal
+  mlflow_tracking_uri: null  # Uses local ./mlruns if not set
+  mlflow_tags:
+    model_type: "embedding"
+    language: "norwegian"
+    dataset: "all-nli-norwegian"
+
+  # TensorBoard logging (automatically enabled if tensorboard installed)
+  # Logs are saved to logging_dir specified in training section
+  # View with: tensorboard --logdir models/norbert4-base-nli-norwegian-v2/logs
+  # Or start MLflow UI: mlflow ui --backend-store-uri ./mlruns
+
+  # Report to (HuggingFace Trainer built-in)
+  # Options: "tensorboard", "wandb", "mlflow", "all", "none"
+  report_to: ["tensorboard", "mlflow"]  # Will use both for local tracking
+
+# LEARNING RATE SCHEDULER - V3 OPTIMAL CONFIGURATION
+# ----------------------------------------------------------------------------
+lr_scheduler:
+  # V3 OPTIMAL STRATEGY: Cosine with 3 Strategic Restarts
+  #
+  # WHY THIS WORKS (Based on V1/V2 analysis + 2024-2025 research):
+  # 1. Combines V1's high sustained LR (2.0e-05) with V2's restart benefits
+  # 2. Only 3 cycles (not 12) = longer productive periods at optimal LR
+  # 3. Each cycle ~5,796 steps (vs V2's 966) = enough time to actually learn
+  # 4. Restarts at 33%, 66% of training - strategic escape from plateaus
+  # 5. V2's early restarts (#1, #2) helped (+0.4%, +0.6%), late ones hurt
+  #
+  # RESEARCH BACKING:
+  # - Cosine annealing works well for transformers (HuggingFace, 2024)
+  # - Fewer cycles (1-4) better than many (12+) for single-epoch (PyTorch docs)
+  # - Restarts help escape plateaus in early-mid training (SGDR paper)
+  # - Linear decay to zero also effective (V1 proof, 2024 research)
+  #
+  # CYCLE STRUCTURE (with batch_size=32, ~17,387 total steps):
+  # - Warmup: 0-1,391 (8%, LR: 0 → 2.0e-05)
+  # - Cycle 1: 1,391-6,787 (31%, LR: 2.0e-05 → ~2.67e-07)
+  # - RESTART → Cycle 2: 6,787-12,183 (31%, LR: 2.0e-05 → ~2.67e-07)
+  # - RESTART → Cycle 3: 12,183-17,387 (30%, LR: 2.0e-05 → ~2.67e-07)
+  #
+  # Each cycle spends ~2,700 steps at LR >1e-05 (V1's proven sweet spot!)
+  # Total time at high LR: ~55% (vs V1's 50%, V2's 22%)
+  #
+  # EXPECTED RESULT: 95.6-95.9% (beat V1's 95.52%)
+  #
+  type: "cosine_with_restarts"
+  num_cycles: 3  # KEY CHANGE: Only 3 cycles, not 12!
+
+  # ALTERNATIVE (if cosine_with_restarts doesn't beat V1, try this):
+  # Based on research: polynomial decay with power<1.0 keeps LR higher longer
+  # type: "polynomial"
+  # power: 0.5  # Square-root decay (slower than linear power=1.0)
+  # lr_end: 5e-06  # Don't go below V1's sweet spot minimum (5.35e-06)
+
+  # Note: warmup_ratio is defined in training section above (0.08)
+
+# ADVANCED OPTIONS (Optional)
+# ----------------------------------------------------------------------------
+advanced:
+  # Push model to HuggingFace Hub periodically during training
+  push_to_hub: true
+  hub_model_id: "thivy/norbert4-base-nli-norwegian-v3-optimal"  # v3 with optimal 3-restart scheduler
+  hub_token: null     # Will use HF_TOKEN environment variable or huggingface-cli login
+  hub_strategy: "checkpoint"  # Push every time we save a checkpoint (every 500 steps)
+  hub_private_repo: false  # Set to true for private repository
+
+  # Resume training from a checkpoint
+  resume_from_checkpoint: null  # Path to checkpoint directory
+
+# COMPUTE CONFIGURATION
+# ----------------------------------------------------------------------------
+compute:
+  # Device to use for training
+  # Options: "auto" (automatic detection), "cuda" (NVIDIA GPU), "mps" (Apple Silicon), "cpu"
+  device: "auto"
