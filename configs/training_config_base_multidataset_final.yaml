@@ -1,0 +1,155 @@
+# Experiment 1: Multi-dataset training with ROUND_ROBIN sampling
+# FULL SCANDINAVIAN MODEL (Norwegian + Danish + Swedish)
+# Combines NLI + Group B (QA) + Group A (DDSC) simultaneously
+# Prevents catastrophic forgetting by training on all tasks together
+#
+# Total training samples: ~1.6M (NO+DA+SV)
+#  - NLI: 556k (Norwegian triplets)
+#  - Group B QA: 100k (NO+DA+SV easy retrieval)
+#  - Group A DDSC: 949k (NO+DA+SV hard retrieval)
+#
+# Anti-overfitting configuration:
+#  - max_seq_length: 256 (better quality, longer contexts)
+#  - LOWER learning rate: 5.0e-6 (prevent rapid overfitting)
+#  - NO warmup (warmup_steps: 0)
+#  - STRONG regularization: weight_decay=0.015, max_grad_norm=1.0
+#  - Reduced batch size: 16 (to fit 256 seq_length in MPS memory)
+
+model:
+  base_model: "ltg/norbert4-base"
+  model_name: "norbert4-base-multidataset-exp1"
+  max_seq_length: 256  # Increased for better quality
+  pooling_mode: "mean"
+
+# Dataset configurations for all three datasets
+# Note: Actual data loading is handled by data_loader_*.py modules
+# These settings document what's being used
+datasets:
+  nli:
+    name: "NLI"
+    path: "Fremtind/all-nli-norwegian"  # Actual dataset used
+    format: "(anchor, positive, negative)"
+    samples: "~569k"
+
+  group_b_qa:
+    name: "Group B QA"
+    sources:
+      - "ltg/norquad (Norwegian QA)"
+      - "ltg/norbookqa (Norwegian OpenBookQA)"
+      - "alexandrainst/scandi-qa (NO+DA+SV QA)"
+      - "supervised-da (Danish pairs)"
+      - "PAWS-X Norwegian (paraphrase)"
+    format: "(query, positive)"
+    samples: "~100k (NO+DA+SV)"
+    # Enable/disable individual datasets
+    use_norquad: true
+    use_openbookqa: true
+    use_scandiqa: true  # Now working! Loads NO + DA + SV QA
+    use_supervised_da: true
+    use_paws: false  # Set to true to include PAWS-X (requires local files)
+
+  group_a_ddsc:
+    name: "Group A DDSC"
+    path: "DDSC/nordic-embedding-training-data"  # Correct path
+    language_filter: ["norwegian", "danish", "swedish"]  # All Scandinavian languages to match ScandiQA
+    format: "(query, positive, [negative])"  # Negative is optional
+    samples: "~968k (all Nordic: NO+DA+SV)"
+    note: "40% with hard negatives, 60% with in-batch negatives only"
+
+training:
+  # Batch size - reduced to fit seq_length=256 in MPS memory
+  per_device_train_batch_size: 16  # Reduced from 32 for 256 seq_length
+  per_device_eval_batch_size: 32   # Reduced from 64
+
+  # Multi-dataset sampling strategy
+  multi_dataset_batch_sampler: "ROUND_ROBIN"  # Sample equally from each dataset
+
+  # Gradient accumulation - maintain effective batch size of 32
+  gradient_accumulation_steps: 2
+
+  # Training duration
+  num_train_epochs: 1  # One epoch through all datasets
+
+  # Learning rate - MUCH LOWER to prevent overfitting (like stage2-v3)
+  learning_rate: 5.0e-6  # 75% reduction from standard 2.0e-5
+  warmup_steps: 0  # NO warmup - avoid hitting optimal too early
+
+  # Weight decay - STRONG regularization
+  weight_decay: 0.015  # Increased from 0.01
+  max_grad_norm: 1.0   # Gradient clipping
+
+  # Mixed precision training
+  bf16: true
+  fp16: false  # Don't use fp16 on MPS
+
+  # Evaluation strategy
+  eval_strategy: "steps"
+  eval_steps: 1000  # Increased for larger dataset
+  save_strategy: "steps"
+  save_steps: 1000
+  save_total_limit: 3
+
+  # Early stopping
+  # Note: In multi-dataset training with eval_dataset (no custom evaluator),
+  # only individual dataset losses are available by default:
+  #   - eval_nli_loss (NLI dataset - 556k samples, 34.7%)
+  #   - eval_group-b-qa_loss (QA dataset - 100k samples, 6.2%)
+  #   - eval_group-a-ddsc_loss (DDSC dataset - 949k samples, 59.1%)
+  # 
+  # We added a custom AverageLossCallback that computes:
+  #   - eval_avg_loss (average of all three dataset losses)
+  # 
+  # Previous MTEB: QA=best (0.209/0.765), NLI=medium (0.163/0.519), DDSC=worst (0.027/0.422)
+  # SOTA model (jealk/TTC-L2V-supervised-2) used DDSC as final training stage
+  # 
+  # Decision: Track eval_avg_loss (average across all datasets) because:
+  #   1. Balanced view: All tasks contribute equally to stopping decision
+  #   2. Prevents premature stopping: QA (6%) won't dominate and stop early
+  #   3. Quality signal: QA quality still influences the average
+  #   4. ROUND_ROBIN alignment: Matches equal sampling strategy
+  #   5. Avoids DDSC trap: Don't optimize solely for worst-performing task
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_group-a-ddsc_loss"  # Average loss across all three datasets
+  greater_is_better: false  # Lower loss is better
+  early_stopping_patience: 5  # More patient to avoid early stopping
+  early_stopping_threshold: 0.0
+
+  # Logging
+  logging_steps: 100
+  logging_first_step: true
+
+  # Data loading - CRITICAL FOR MPS
+  dataloader_num_workers: 0  # Must be 0 for MPS
+  dataloader_pin_memory: false
+
+  # Reproducibility
+  seed: 42
+
+lr_scheduler:
+  type: "cosine"  # Smooth decay, no warmup
+
+experiment_tracking:
+  output_dir: "models/norbert4-base-multidataset-exp1"
+  run_name: "exp1-multidataset-roundrobin-256seq"
+  report_to: ["tensorboard", "mlflow"]
+  logging_dir: "logs/exp1-multidataset-roundrobin"
+  use_mlflow: true
+  mlflow_experiment_name: "norwegian-embedding-multidataset"
+  mlflow_run_name: "exp1-multidataset-roundrobin-256seq"
+  mlflow_tags:
+    model_type: "embedding"
+    language: "norwegian"
+    approach: "multidataset"
+    sampling: "round_robin"
+    seq_length: "256"
+    anti_overfitting: "true"
+
+# Note: Evaluation is done via eval_loss on all three datasets
+# No separate evaluators defined - using default eval_loss metric
+
+# HuggingFace Hub configuration
+advanced:
+  push_to_hub: true
+  hub_model_id: "thivy/norbert4-exp1-multidataset-roundrobin"
+  hub_strategy: "end"  # Push only at end of training
+  hub_private_repo: false

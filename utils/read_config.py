@@ -124,8 +124,19 @@ def validate_config(config: Config) -> None:
         raise ValueError("Missing required field: model.name")
 
     # Check dataset config
-    required_dataset_fields = ['name', 'train_split', 'anchor_column',
-                                'positive_column', 'negative_column']
+    # Auto-detect dataset type based on name (same logic as main.py)
+    dataset_name_lower = config.dataset.name.lower()
+
+    if "sts" in dataset_name_lower:
+        # STS dataset validation
+        required_dataset_fields = ['name', 'train_split']
+        # Optional STS fields (have defaults in main.py)
+        # sentence1_column, sentence2_column, score_column
+    else:
+        # NLI dataset validation (default)
+        required_dataset_fields = ['name', 'train_split', 'anchor_column',
+                                    'positive_column', 'negative_column']
+
     for field in required_dataset_fields:
         if not hasattr(config.dataset, field):
             raise ValueError(f"Missing required field: dataset.{field}")

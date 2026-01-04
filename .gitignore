@@ -1,4 +1,52 @@
-.venv/xw
-models/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Model checkpoints (keep only final models)
+models/*/checkpoint-*/
+*.pth
+*.pt
+!models/*/model.safetensors
+
+# Training artifacts
 mlruns/
+*.log
+training_*.log
+
+# Analysis outputs (regenerate as needed)
+analysis/*.png
+results/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# HuggingFace cache
+.cache/
+
+# MTEB cache
+mteb_cache/
+data/
 docs/
+models/
+logs/
+results/
+analysis/

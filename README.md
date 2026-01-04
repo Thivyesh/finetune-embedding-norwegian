@@ -1,45 +1,51 @@
-# Norwegian Embedding Model Fine-Tuning
+# Scandinavian Embedding Models
 
-Fine-tune Norwegian sentence embedding models using triplet data with the sentence-transformers library.
+Training state-of-the-art embedding models for Norwegian, Danish, and Swedish using multi-dataset approach.
 
-## 📚 What is This Project?
+## 🎯 Overview
 
-This project helps you **fine-tune embedding models** for Norwegian text. An embedding model converts text into numerical vectors (embeddings) where semantically similar texts have similar vectors. This is essential for:
+This project trains **embedding models** that convert Scandinavian text into numerical vectors for semantic search, retrieval, and question answering. The models are trained on a combination of:
 
-- **Semantic search**: Find documents by meaning, not just keywords
-- **Clustering**: Group similar texts together
-- **Question answering**: Match questions to relevant answers
-- **Recommendation systems**: Find similar content
+- **NLI data** (Natural Language Inference): Teaching semantic relationships
+- **QA data** (Question-Answer pairs): Teaching information retrieval  
+- **Retrieval data** (DDSC): Teaching document similarity
 
-### What is Triplet Training?
+### Key Achievement
 
-Triplet training uses three types of sentences:
-- **Anchor**: A reference sentence
-- **Positive**: A sentence similar to the anchor (should be close in vector space)
-- **Negative**: A sentence different from the anchor (should be far in vector space)
+**NorBERT4-base model trained with this approach achieves:**
+- NorQuad ndcg@10: **0.232** (+11% improvement)
+- SNL ndcg@10: **0.818** (+6.9% improvement)
 
-Example triplet:
-```
-Anchor:   "Hundene leker i snøen."
-Positive: "Tre hunder leker med et leketøy i snøen."
-Negative: "Det er veldig varmt."
-```
+**Deployed model**: [thivy/norbert4-base-scandinavian-embedding](https://huggingface.co/thivy/norbert4-base-scandinavian-embedding)
 
-The model learns to make the anchor and positive embeddings closer together, while pushing the negative farther away.
+## 🏆 Why Multi-Dataset Training?
+
+Traditional staged training (NLI → QA → Retrieval) suffers from catastrophic forgetting. This project uses **simultaneous multi-dataset training** with ROUND_ROBIN sampling:
+
+✅ **Better performance**: All tasks improve together  
+✅ **No forgetting**: Earlier datasets remain relevant  
+✅ **Efficient**: One training run instead of three  
+✅ **Balanced**: Equal representation from each dataset
 
 ## 🏗️ Project Structure
 
 ```
 finetune-embedding-norwegian/
 ├── configs/
-│   └── training_config.yaml    # All training parameters (EDIT THIS!)
+│   ├── training_config_base_multidataset_final.yaml    # ⭐ Best base model config
+│   ├── training_config_large_multidataset.yaml         # Large model config
+│   └── README.md                                       # Config documentation
 ├── utils/
-│   ├── read_config.py          # Loads YAML config
-│   ├── data_loader.py          # Loads Norwegian NLI dataset
-│   └── trainer.py              # Training pipeline
-├── main.py                     # Main training script
-├── models/                     # Saved models will go here
-└── README.md                   # This file
+│   ├── trainer_multidataset.py      # Multi-dataset trainer (ROUND_ROBIN)
+│   ├── trainer_nli.py               # Single NLI trainer
+│   ├── data_loader_nli.py           # NLI dataset loader
+│   ├── data_loader_scandi_qa.py     # Multi-source QA datasets (NO+DA+SV)
+│   ├── data_loader_ddsc.py          # DDSC retrieval data (all tasks)
+│   └── data_loader_paws.py          # PAWS-X paraphrase data
+├── scripts/
+│   ├── evaluate_mteb.py             # MTEB evaluation
+│   └── analyze_checkpoint_degradation.py
+└── main.py                          # Legacy single-dataset trainer
 ```
 
 ## 🚀 Quick Start
@@ -47,298 +53,323 @@ finetune-embedding-norwegian/
 ### 1. Install Dependencies
 
 ```bash
-# Using uv (recommended)
 uv sync
-
-# Or using pip
-pip install -e .
 ```
 
-### 2. Understand the Config File
+### 2. Train Base Model
 
-Open [`configs/training_config.yaml`](configs/training_config.yaml) and read through it. Every parameter is documented with comments explaining:
-- What it does
-- Why it matters
-- What values to use
-
-**Key parameters to understand:**
-
-```yaml
-model:
-  name: "ltg/norbert3-large"  # The base Norwegian model to fine-tune
-  max_seq_length: 128          # Maximum length of sentences (in tokens)
-
-dataset:
-  name: "Fremtind/all-nli-norwegian"  # Norwegian NLI triplet dataset (569K samples)
-
-training:
-  num_train_epochs: 1          # How many times to go through the dataset
-  per_device_train_batch_size: 16  # Batch size (larger = faster but more memory)
-  learning_rate: 2.0e-5        # How fast to learn (2e-5 is safe default)
-```
-
-### 3. Run a Quick Test First
-
-Before training on the full dataset, test that everything works:
+Train the proven NorBERT4-base model (640 dimensions, 256 tokens):
 
 ```bash
-python main.py --quick-test
+caffeinate -i uv run python -m utils.trainer_multidataset \
+  configs/training_config_base_multidataset_final.yaml
 ```
 
-This runs training on just 1,000 samples to verify:
-- ✓ Config is valid
-- ✓ Dataset downloads correctly
-- ✓ Model loads successfully
-- ✓ Training loop works
-- ✓ Checkpoints are saved
+**Training details:**
+- **Datasets**: ~1.6M samples (Norwegian + Danish + Swedish)
+  - NLI: 556k triplets
+  - QA: 100k query-answer pairs  
+  - DDSC: 949k retrieval pairs
+- **Time**: ~18-24 hours on Apple Silicon M2 Pro
+- **Memory**: ~25-30GB RAM
+- **Output**: `models/norbert4-base-multidataset-exp1/`
 
-**This should take 2-5 minutes** depending on your hardware.
+### 3. Train Large Model
 
-### 4. Run Full Training
-
-Once the quick test works, run full training:
+Train the NorBERT4-large model (1024 dimensions):
 
 ```bash
-python main.py
+caffeinate -i uv run python -m utils.trainer_multidataset \
+  configs/training_config_large_multidataset.yaml
 ```
 
-**Expected duration:**
-- **CPU**: 10-20 hours for 1 epoch (569K samples)
-- **GPU (CUDA)**: 1-3 hours for 1 epoch
-- **Apple Silicon (MPS)**: 3-6 hours for 1 epoch
+**Requirements:**
+- **64GB RAM** (uses gradient checkpointing)
+- **Time**: ~24-30 hours on Apple Silicon
+- **Memory**: ~35-45GB RAM
 
-### 5. Use Your Trained Model
+### 4. Evaluate with MTEB
 
-After training completes, use your model like this:
+```bash
+uv run python scripts/evaluate_mteb.py \
+  --model models/norbert4-base-multidataset-exp1
+```
+## 💡 Using Trained Models
+
+### Load and Use
 
 ```python
 from sentence_transformers import SentenceTransformer
 
-# Load your fine-tuned model
-model = SentenceTransformer("models/norbert3-large-nli-norwegian")
+# Load your trained model
+model = SentenceTransformer("models/norbert4-base-multidataset-exp1")
 
-# Encode Norwegian sentences
-sentences = [
-    "Hva er hovedstaden i Norge?",
-    "Oslo er Norges hovedstad.",
-    "Jeg liker å spise pizza."
+# Encode Norwegian text
+queries = ["Hva er hovedstaden i Norge?"]
+documents = [
+    "Oslo er Norges hovedstad og største by.",
+    "Bergen er kjent for sine syv fjell.",
 ]
 
-embeddings = model.encode(sentences)
+query_embedding = model.encode(queries)
+doc_embeddings = model.encode(documents)
 
 # Compute similarity
 from sentence_transformers.util import cos_sim
-similarity = cos_sim(embeddings[0], embeddings[1])
-print(f"Similarity between Q&A: {similarity[0][0]:.3f}")  # Should be high!
-
-similarity = cos_sim(embeddings[0], embeddings[2])
-print(f"Similarity between Q and unrelated: {similarity[0][0]:.3f}")  # Should be low
+similarities = cos_sim(query_embedding, doc_embeddings)
+print(f"Similarities: {similarities}")
 ```
 
-## 🎓 Understanding the Training Process
+### Push to HuggingFace Hub
 
-### What Happens During Training?
+```python
+from sentence_transformers import SentenceTransformer
 
-1. **Load base model**: We start with a pre-trained Norwegian BERT model (`ltg/norbert3-large`)
-2. **Prepare data**: Load triplets from the Fremtind Norwegian NLI dataset
-3. **Training loop**: For each batch of triplets:
-   - Model encodes anchor, positive, and negative into embeddings
-   - Loss function calculates how to improve:
-     - Pull anchor and positive closer
-     - Push anchor and negative farther apart
-   - Backpropagation updates model weights
-4. **Evaluation**: Periodically check accuracy on validation set
-5. **Save checkpoints**: Best models are saved automatically
+model = SentenceTransformer("models/norbert4-base-multidataset-exp1")
+model.push_to_hub("your-username/norbert4-scandinavian-embedding")
+```
 
-### Key Concepts
+## 📊 Training Approach
 
-**Loss Function: MultipleNegativesRankingLoss**
-- Most efficient loss for triplet training
-- Uses other samples in the batch as additional negatives
-- Larger batch sizes → better training (but more memory)
+### Multi-Dataset Strategy
 
-**Evaluation Metric: Triplet Accuracy**
-- For each triplet, check if: `distance(anchor, positive) < distance(anchor, negative)`
-- Accuracy = % of triplets where this is true
-- Goal: Get accuracy as high as possible (80-95% is good)
+The trainer uses **ROUND_ROBIN sampling** to combine three datasets:
 
-**Learning Rate Warmup**
-- Learning rate starts low and gradually increases
-- Prevents unstable training at the beginning
-- `warmup_ratio: 0.1` = 10% of training uses warmup
-
-## ⚙️ Configuration Guide
-
-### Adjusting Training Speed vs Quality
-
-**Faster training (lower quality):**
 ```yaml
-training:
-  per_device_train_batch_size: 32  # Larger batches
-  num_train_epochs: 1              # Fewer epochs
-
-dataset:
-  max_train_samples: 50000         # Use subset of data
+multi_dataset_batch_sampler: "ROUND_ROBIN"
 ```
 
-**Better quality (slower training):**
-```yaml
-training:
-  per_device_train_batch_size: 16  # Smaller batches (more updates)
-  num_train_epochs: 3              # More epochs
-  learning_rate: 1.0e-5            # Lower learning rate (more careful)
+**How it works:**
+1. Each training step samples equally from all three datasets
+2. Model learns all tasks simultaneously
+3. No catastrophic forgetting
+4. Better generalization
 
-dataset:
-  max_train_samples: null          # Use all data
-```
-
-### Memory Issues?
-
-If you run out of GPU/RAM memory:
+### Key Training Parameters
 
 ```yaml
 training:
-  per_device_train_batch_size: 8   # Reduce batch size
-  gradient_accumulation_steps: 2   # Simulate larger batches
-  # Effective batch size = 8 * 2 = 16
+  per_device_train_batch_size: 16     # Batch size per device
+  gradient_accumulation_steps: 2      # Effective batch = 16 * 2 = 32
+  learning_rate: 5.0e-6               # Low LR prevents overfitting
+  warmup_steps: 0                     # No warmup (avoids early peak)
+  weight_decay: 0.015                 # Strong regularization
 ```
 
-### Different Base Models
+### Anti-Overfitting Strategy
 
-Try other Norwegian models:
+1. **No warmup**: Prevents hitting optimal point too early
+2. **Low learning rate**: Slow, steady convergence (5e-6 vs standard 2e-5)
+3. **Strong weight decay**: 0.015 regularization
+4. **Single epoch**: Through combined 1.6M samples
+5. **Early stopping**: Monitors average loss across all datasets
 
+### Memory Optimization
+
+For large models on Apple Silicon:
+
+```yaml
+# Gradient checkpointing automatically enabled
+# Reduces memory by 30-50% with ~20% slowdown
+```
+
+## 📈 Datasets Used
+
+### 1. NLI (Natural Language Inference)
+- **Source**: [Fremtind/all-nli-norwegian](https://huggingface.co/datasets/Fremtind/all-nli-norwegian)
+- **Samples**: 556k triplets
+- **Format**: (anchor, positive, negative)
+- **Purpose**: Teaches semantic relationships and entailment
+
+### 2. QA (Question-Answer)
+- **Sources**: 
+  - ltg/norquad (Norwegian QA)
+  - ltg/norbookqa (Norwegian OpenBookQA)
+  - alexandrainst/scandi-qa (Norwegian + Danish + Swedish)
+  - Supervised Danish pairs
+- **Samples**: ~100k pairs
+- **Format**: (query, positive)
+- **Purpose**: Teaches question-answer matching
+
+### 3. DDSC Retrieval
+- **Source**: [DDSC/nordic-embedding-training-data](https://huggingface.co/datasets/DDSC/nordic-embedding-training-data)
+- **Samples**: 949k pairs (Norwegian + Danish + Swedish)
+- **Format**: (query, positive, [negative])
+- **Purpose**: Teaches document retrieval and similarity
+
+**Total**: ~1.6 million training samples across three Scandinavian languages
+
+## 🎯 Results
+
+### Base Model Performance
+
+**Model**: [thivy/norbert4-base-scandinavian-embedding](https://huggingface.co/thivy/norbert4-base-scandinavian-embedding)
+
+| Task | Metric | Score | vs Previous |
+|------|--------|-------|-------------|
+| NorQuad | ndcg@10 | **0.232** | +11.0% |
+| SNL | ndcg@10 | **0.818** | +6.9% |
+
+**Configuration:**
+- Base model: ltg/norbert4-base
+- Embedding dim: 640
+- Context length: 256 tokens
+- Training: Multi-dataset ROUND_ROBIN
+
+### Why It Works
+
+✅ **Multi-dataset training** beats staged approach  
+✅ **Low learning rate** (5e-6) prevents overfitting  
+✅ **No warmup** avoids early performance peak  
+✅ **Strong regularization** improves generalization  
+✅ **ROUND_ROBIN sampling** balances all tasks
+
+## ⚙️ Configuration
+
+See `configs/README.md` for detailed configuration documentation.
+
+### Key Parameters to Adjust
+
+**Sequence length** (input token limit):
 ```yaml
 model:
-  name: "ltg/norbert3-base"        # Smaller, faster (110M params)
-  # name: "ltg/norbert3-large"     # Larger, better quality (340M params)
-  # name: "NbAiLab/nb-bert-base"   # Alternative Norwegian BERT
+  max_seq_length: 256  # 256, 512, or 1024
 ```
 
-## 📊 Monitoring Training
-
-### Training Logs
-
-Watch the console output for:
-- **Loss**: Should decrease over time
-- **Eval accuracy**: Should increase over time
-- **Learning rate**: Should warm up then gradually decrease
-
-### TensorBoard (Optional)
-
-View detailed training metrics:
-
-```bash
-# Install tensorboard
-pip install tensorboard
-
-# Launch tensorboard
-tensorboard --logdir models/norbert3-large-nli-norwegian/logs
-
-# Open browser to http://localhost:6006
+**Batch size** (memory vs speed):
+```yaml
+training:
+  per_device_train_batch_size: 16  # Reduce if OOM
+  gradient_accumulation_steps: 2   # Maintain effective batch size
 ```
 
-## 🧪 Testing and Validation
-
-### Test the Data Loader
-
-```bash
-python utils/data_loader.py
+**Learning rate** (convergence speed):
+```yaml
+training:
+  learning_rate: 5.0e-6  # Lower = more stable, slower
 ```
 
-This will:
-- Show dataset structure
-- Display example triplets
-- Verify columns are correct
+### Hardware Requirements
 
-### Test the Config Loader
+**Base model (640 dim, 256 seq):**
+- RAM: 16GB minimum, 32GB recommended
+- Time: 18-24 hours on M2 Pro
 
-```bash
-python utils/read_config.py
-```
-
-This will:
-- Load your config
-- Validate all required fields
-- Show key parameters
-
-### Advanced: Custom Config
-
-Create a custom config for experimentation:
-
-```bash
-cp configs/training_config.yaml configs/my_experiment.yaml
-# Edit my_experiment.yaml
-python main.py --config configs/my_experiment.yaml
-```
+**Large model (1024 dim, 256 seq):**
+- RAM: 32GB minimum, 64GB recommended
+- Time: 24-30 hours on M2 Pro
+- Gradient checkpointing: automatic
 
 ## 🔧 Troubleshooting
 
-### "CUDA out of memory"
+### Out of Memory (OOM)
 
-**Solution**: Reduce batch size
+**Reduce batch size:**
 ```yaml
 training:
-  per_device_train_batch_size: 8  # Try 8, 4, or even 2
+  per_device_train_batch_size: 8  # Try 8, 4, or 2
+  gradient_accumulation_steps: 4  # Maintain effective batch = 32
 ```
 
-### "Dataset not found"
+**For large models:**
+- Gradient checkpointing is automatic
+- Reduces memory by 30-50%
+- Slightly slower (~20%)
 
-**Solution**: Check internet connection and dataset name
+### Training Crashes
+
+**Use caffeinate** to prevent sleep on macOS:
 ```bash
-# Manually test dataset loading
+caffeinate -i uv run python -m utils.trainer_multidataset configs/...
+```
+
+**Check logs:**
+```bash
+tail -f models/norbert4-base-multidataset-exp1/training.log
+```
+
+### Dataset Download Issues
+
+**Manual test:**
+```bash
 python -c "from datasets import load_dataset; load_dataset('Fremtind/all-nli-norwegian')"
 ```
 
-### Training is too slow on CPU
-
-**Solutions**:
-1. Use a smaller model: `ltg/norbert3-base` instead of `large`
-2. Reduce dataset size: `max_train_samples: 50000`
-3. Use a cloud GPU (Google Colab, AWS, etc.)
-
-### "Config file not found"
-
-**Solution**: Run from project root directory
+**Clear cache if corrupted:**
 ```bash
-# Make sure you're in the right directory
-pwd  # Should show: .../finetune-embedding-norwegian
-python main.py
+rm -rf ~/.cache/huggingface/datasets/
 ```
 
-## 📖 Learning Resources
+### Slow Training
 
-### Understanding Embeddings
-- [Sentence Transformers Documentation](https://www.sbert.net/)
-- [HuggingFace Training Guide](https://huggingface.co/blog/train-sentence-transformers)
+**Optimize for speed:**
+- Increase batch size if memory allows
+- Reduce `max_seq_length` (512 → 256)
+- Use base model instead of large
+- Train on subset for testing first
 
-### Norwegian NLP Resources
-- [Fremtind/all-nli-norwegian Dataset](https://huggingface.co/datasets/Fremtind/all-nli-norwegian)
-- [NorBERT Models](https://huggingface.co/ltg)
+## � Documentation
 
-### Advanced Topics
-- [Loss Functions](https://www.sbert.net/docs/package_reference/losses.html)
-- [Evaluation Metrics](https://www.sbert.net/docs/package_reference/evaluation.html)
+- **configs/README.md**: Configuration file documentation
+- **docs/**: Detailed guides on training strategies, datasets, and approaches
 
-## 🎯 Next Steps
+### Key Documents
 
-After successfully fine-tuning on triplets:
+- `SCANDINAVIAN_DATASETS_COMPREHENSIVE.md`: All available Scandinavian datasets
+- `SOTA_TRAINING_APPROACHES.md`: Analysis of state-of-the-art methods
+- `TRAINING_SUMMARY.md`: Training insights and lessons learned
+- `MODERNBERT_EXPLAINED.md`: Understanding the base architecture
 
-1. **Evaluate on your domain**: Test the model on your specific use case
-2. **Try multi-dataset training**: Combine NLI + STS data (see original guides)
-3. **LlamaIndex fine-tuning**: Further specialize for RAG with your documents
-4. **Share your model**: Push to HuggingFace Hub for others to use
+## 🔬 Advanced Topics
 
-## 📝 Notes
+### Monitoring Training
 
-- Training is deterministic (same config = same results) thanks to `seed: 42`
-- Checkpoints are saved every 500 steps by default
-- Best model is automatically selected based on eval accuracy
-- First run downloads ~2-5GB of model + data (then cached)
+**MLflow tracking:**
+```bash
+mlflow ui
+# Open http://localhost:5000
+```
+
+**TensorBoard:**
+```bash
+tensorboard --logdir models/norbert4-base-multidataset-exp1/logs
+```
+
+### Custom Datasets
+
+Add your own dataset to the multi-dataset trainer:
+
+1. Create a data loader in `utils/data_loader_*.py`
+2. Update the trainer to include it
+3. Adjust ROUND_ROBIN sampling proportions
+
+### Evaluation
+
+**MTEB benchmarks:**
+```bash
+uv run python scripts/evaluate_mteb.py --model <model_path>
+```
+
+**Checkpoint analysis:**
+```bash
+uv run python scripts/analyze_checkpoint_degradation.py
+```
 
 ## 🤝 Contributing
 
-Found a bug or have a suggestion? Please open an issue!
+Contributions welcome! Areas of interest:
+- Additional Scandinavian datasets
+- Memory optimization techniques
+- Evaluation on domain-specific tasks
+- Support for other Nordic languages (Icelandic, Faroese)
 
 ## 📄 License
 
-This project follows the same license as your original work. Model and dataset licenses may vary - check their respective pages on HuggingFace.
+MIT License - see LICENSE file for details.
+
+## � Acknowledgments
+
+- **Language Technology Group (LTG)** at University of Oslo for NorBERT models
+- **Fremtind** for Norwegian NLI dataset
+- **DDSC** for Nordic embedding training data
+- **Alexandra Institute** for Scandinavian QA data
