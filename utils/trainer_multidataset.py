@@ -17,10 +17,10 @@ from sentence_transformers.training_args import (
     MultiDatasetBatchSamplers,
 )
 from sentence_transformers import SentenceTransformerTrainer
-from transformers import TrainerCallback
+from transformers import TrainerCallback, EarlyStoppingCallback
 
 from utils.read_config import Config
-from utils.data_loader_nli import load_triplet_dataset
+from utils.data_loader import load_triplet_dataset
 from utils.data_loader_scandi_qa import load_scandi_qa_data  # Multi-source QA datasets
 from utils.data_loader_ddsc import load_ddsc_data  # DDSC retrieval data
 
@@ -323,9 +323,10 @@ class MultiDatasetTrainer:
             # Training duration
             num_train_epochs=self.config.training.num_train_epochs,
 
-            # Learning rate
+            # Learning rate - support both warmup_steps and warmup_ratio
             learning_rate=self.config.training.learning_rate,
-            warmup_steps=self.config.training.warmup_steps,
+            warmup_steps=getattr(self.config.training, 'warmup_steps', 0),
+            warmup_ratio=getattr(self.config.training, 'warmup_ratio', 0.0),
             lr_scheduler_type=self.config.lr_scheduler.type,
 
             # Regularization
@@ -360,6 +361,20 @@ class MultiDatasetTrainer:
             hub_private_repo=hub_private_repo,
         )
 
+        # Create callbacks list
+        callbacks = [AverageLossCallback()]
+        
+        # Add early stopping if configured
+        early_stopping_patience = getattr(self.config.training, 'early_stopping_patience', 0)
+        if early_stopping_patience > 0:
+            early_stopping_threshold = getattr(self.config.training, 'early_stopping_threshold', 0.0)
+            early_stopping = EarlyStoppingCallback(
+                early_stopping_patience=early_stopping_patience,
+                early_stopping_threshold=early_stopping_threshold
+            )
+            callbacks.append(early_stopping)
+            logger.info(f"Early stopping enabled: patience={early_stopping_patience}, threshold={early_stopping_threshold}")
+
         # Create trainer
         trainer = SentenceTransformerTrainer(
             model=model,
@@ -367,7 +382,7 @@ class MultiDatasetTrainer:
             train_dataset=train_datasets,  # Dict of training datasets
             eval_dataset=eval_datasets,     # Dict of eval datasets (matching keys)
             loss=train_losses,              # Dict of losses (matching keys)
-            callbacks=[AverageLossCallback()],  # Add custom callback for average loss
+            callbacks=callbacks,  # Callbacks including average loss and early stopping
         )
 
         # Check for existing checkpoints to resume from

@@ -1,0 +1,154 @@
+# Experiment 1 LARGE V2: IMPROVED Multi-dataset training (NorBERT4-large)
+# 
+# FIXING THE ISSUES FROM V1:
+# ❌ V1 had: Too small batch (32), too low LR (5e-6), too short seq_length (256)
+# ✅ V2 fixes: Larger batch (64), proper LR (2e-5), longer sequences (512)
+#
+# WHY V1 PERFORMED POORLY:
+# 1. Effective batch 32 < base model's 48 → unstable updates
+# 2. LR 5e-6 is 57% lower than base 1.15e-5 → underfitting  
+# 3. Seq length 256 < base uses full data → less context
+# 4. Training interrupted multiple times → inconsistent
+#
+# V2 IMPROVEMENTS (based on ModernBERT fine-tuning research):
+# - Effective batch: 64 (8 x 8) vs v1's 32 → more stable
+# - Learning rate: 2e-5 (standard fine-tuning LR from ModernBERT BEIR sweeps)
+# - Max seq length: 512 vs v1's 256 → 2x more context
+# - Warmup: 5% ratio (ModernBERT retrieval training standard)
+# - Weight decay: 0.01 (standard for fine-tuning)
+#
+# KEY INSIGHT from ModernBERT paper:
+# Fine-tuning uses SAME LR range [1e-5 to 1e-4] for BOTH base AND large models.
+# Pre-training LR scaling does NOT apply to fine-tuning.
+#
+# Total training samples: ~1.6M (NO+DA+SV)
+#  - NLI: 556k (Norwegian triplets)
+#  - Group B QA: 100k (NO+DA+SV easy retrieval)
+#  - Group A DDSC: 949k (NO+DA+SV hard retrieval)
+
+model:
+  base_model: "ltg/norbert4-large"
+  model_name: "norbert4-large-multidataset-exp1-v2"
+  max_seq_length: 256  # INCREASED from 256 - match base model capacity
+  pooling_mode: "mean"
+
+# Dataset configurations (same as v1)
+datasets:
+  nli:
+    name: "NLI"
+    path: "Fremtind/all-nli-norwegian"
+    format: "(anchor, positive, negative)"
+    samples: "~569k"
+
+  group_b_qa:
+    name: "Group B QA"
+    sources:
+      - "ltg/norquad (Norwegian QA)"
+      - "ltg/norbookqa (Norwegian OpenBookQA)"
+      - "alexandrainst/scandi-qa (NO+DA+SV QA)"
+      - "supervised-da (Danish pairs)"
+      - "PAWS-X Norwegian (paraphrase)"
+    format: "(query, positive)"
+    samples: "~100k (NO+DA+SV)"
+    use_norquad: true
+    use_openbookqa: true
+    use_scandiqa: true
+    use_supervised_da: true
+    use_paws: false
+
+  group_a_ddsc:
+    name: "Group A DDSC"
+    path: "DDSC/nordic-embedding-training-data"
+    language_filter: ["norwegian", "danish", "swedish"]
+    format: "(query, positive, [negative])"
+    samples: "~968k (all Nordic: NO+DA+SV)"
+    note: "40% with hard negatives, 60% with in-batch negatives only"
+
+training:
+  # Batch size - INCREASED for stability
+  per_device_train_batch_size: 8  # Keep at 8 for memory safety
+  per_device_eval_batch_size: 16
+
+  # Multi-dataset sampling strategy
+  multi_dataset_batch_sampler: "ROUND_ROBIN"
+
+  # Gradient accumulation - DOUBLED for larger effective batch
+  gradient_accumulation_steps: 8  # 8 x 8 = 64 effective batch (was 32)
+
+  # Training duration
+  num_train_epochs: 1
+
+  # Learning rate - based on ModernBERT fine-tuning research
+  # ModernBERT used [1e-5 to 1e-4] for BOTH base AND large in GLUE/BEIR sweeps
+  # With 1.6M samples (25k steps), can use slightly higher LR than base
+  learning_rate: 2.0e-5  # Increased from 1.5e-5 (more steps = can use higher LR)
+  warmup_ratio: 0.05  # 5% warmup (ModernBERT retrieval training standard)
+
+  # Regularization - REDUCED for better learning
+  weight_decay: 0.01  # Reduced from 0.015
+  max_grad_norm: 1.0
+
+  # Mixed precision
+  bf16: true
+  fp16: false
+
+  # Evaluation strategy
+  eval_strategy: "steps"
+  eval_steps: 1000
+  save_strategy: "steps"
+  save_steps: 1000
+  save_total_limit: 3
+
+  # Early stopping - ENABLED
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_ddsc_loss"
+  greater_is_better: false
+  early_stopping_patience: 5  # Stop if no improvement for 5 evals (5000 steps)
+  early_stopping_threshold: 0.0  # Any improvement counts
+
+  # Logging
+  logging_steps: 100
+  logging_first_step: true
+
+  # Data loading
+  dataloader_num_workers: 0
+  dataloader_pin_memory: false
+
+  # Reproducibility
+  seed: 42
+
+lr_scheduler:
+  type: "cosine"  # Smooth decay after warmup
+
+experiment_tracking:
+  output_dir: "models/norbert4-large-multidataset-exp1-v2"
+  run_name: "exp1-large-multidataset-v2-512seq-64batch"
+  report_to: ["tensorboard", "mlflow"]
+  logging_dir: "models/norbert4-large-multidataset-exp1-v2/logs"  # TensorBoard logs INSIDE model folder
+  use_mlflow: true
+  mlflow_experiment_name: "norwegian-embedding-multidataset"
+  mlflow_run_name: "exp1-large-multidataset-v2-512seq-64batch"
+  mlflow_tags:
+    model_type: "embedding"
+    model_size: "large"
+    language: "norwegian"
+    approach: "multidataset"
+    sampling: "round_robin"
+    seq_length: "512"
+    effective_batch: "64"
+    version: "v2_improved"
+    fixes: "batch_lr_seqlen"
+
+# HuggingFace Hub configuration
+advanced:
+  push_to_hub: true
+  hub_model_id: "thivy/norbert4-large-scandinavian-embedding-v2"
+  hub_strategy: "end"
+  hub_private_repo: false
+
+# TRAINING TIPS:
+# 1. DO NOT interrupt training - let it complete full epoch
+# 2. Monitor eval_ddsc_loss - should go below 0.11 (base achieved 0.15)
+# 3. Expected memory: ~50-55GB with gradient checkpointing
+# 4. Training time: ~3-4 hours for full epoch
+# 5. Watch for overfitting after step 7000 - early stopping will handle it
