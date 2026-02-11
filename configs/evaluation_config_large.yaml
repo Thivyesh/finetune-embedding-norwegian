@@ -1,0 +1,43 @@
+# MTEB Evaluation Configuration - Large Model
+# Configuration for evaluating the large Norwegian embedding model
+
+# Quick Start:
+# Run: uv run python scripts/evaluate_mteb.py --config configs/evaluation_config_large.yaml
+
+# Model to evaluate
+model_path: "models/norbert4-large-multidataset-exp1/final"
+
+# Benchmark selection
+benchmark:
+  name: "MTEB(Scandinavian, v1)"
+  languages:
+    - nob
+    - nno
+  task_types: null
+  exclude_tasks: []
+
+# Model configuration
+model:
+  trust_remote_code: true
+  device: null  # auto-detect
+  model_kwargs: null
+
+# Evaluation settings
+evaluation:
+  output_dir: "results/mteb"
+  verbosity: 2
+  batch_size: null  # use model default
+  show_detailed_results: true
+  show_overall_score: true
+
+# Cache settings
+cache:
+  cache_dir: "~/.cache/mteb"
+  download_public_results: false
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  save_to_file: false
+  log_file: "logs/mteb_evaluation.log"

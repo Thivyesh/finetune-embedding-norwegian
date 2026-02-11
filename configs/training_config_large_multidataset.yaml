@@ -98,26 +98,8 @@ training:
   save_total_limit: 3
 
   # Early stopping
-  # Note: In multi-dataset training with eval_dataset (no custom evaluator),
-  # only individual dataset losses are available by default:
-  #   - eval_nli_loss (NLI dataset - 556k samples, 34.7%)
-  #   - eval_group-b-qa_loss (QA dataset - 100k samples, 6.2%)
-  #   - eval_group-a-ddsc_loss (DDSC dataset - 949k samples, 59.1%)
-  # 
-  # We added a custom AverageLossCallback that computes:
-  #   - eval_avg_loss (average of all three dataset losses)
-  # 
-  # Previous MTEB: QA=best (0.209/0.765), NLI=medium (0.163/0.519), DDSC=worst (0.027/0.422)
-  # SOTA model (jealk/TTC-L2V-supervised-2) used DDSC as final training stage
-  # 
-  # Decision: Track eval_avg_loss (average across all datasets) because:
-  #   1. Balanced view: All tasks contribute equally to stopping decision
-  #   2. Prevents premature stopping: QA (6%) won't dominate and stop early
-  #   3. Quality signal: QA quality still influences the average
-  #   4. ROUND_ROBIN alignment: Matches equal sampling strategy
-  #   5. Avoids DDSC trap: Don't optimize solely for worst-performing task
   load_best_model_at_end: true
-  metric_for_best_model: "eval_group-a-ddsc_loss"  # Average loss across all three datasets
+  metric_for_best_model: "eval_ddsc_loss"  # Average loss across all three datasets
   greater_is_better: false  # Lower loss is better
   early_stopping_patience: 5  # More patient to avoid early stopping
   early_stopping_threshold: 0.0

@@ -1,0 +1,168 @@
+# NorBERT4-XLarge Multi-dataset Training Configuration
+# 
+# MODEL: ltg/norbert4-xlarge (987M parameters)
+# HARDWARE: Apple Silicon M4 Pro Max 64GB (or A100 40GB+)
+#
+# KEY CONSTRAINTS:
+# - XLarge is 2.7x larger than Large (987M vs 360M)
+# - Requires gradient checkpointing to fit in 64GB
+# - Training will be slower due to activation recomputation
+#
+# MEMORY ESTIMATION (from validate_memory.py):
+# - Training memory: ~16.6 GB (with checkpointing)
+# - Peak system usage: ~32-43 GB (depending on baseline)
+# - Headroom: ~21-32 GB
+#
+# LEARNING RATE (from ModernBERT paper research):
+# KEY INSIGHT: Fine-tuning uses SAME LR range for all model sizes!
+# ModernBERT Appendix E shows GLUE/BEIR sweeps used [1e-5 to 1e-4] for BOTH base AND large.
+# This differs from pre-training where larger models need lower LR.
+#
+# For fine-tuning:
+# - Pre-training LR scaling does NOT apply
+# - Dataset size matters more than model size
+# - 1.6M samples with 25k steps = plenty of convergence time
+#
+# Using 1.5e-5 (same as Large) based on ModernBERT fine-tuning practice.
+#
+# Total training samples: ~1.6M (NO+DA+SV)
+#  - NLI: 556k (Norwegian triplets)
+#  - Group B QA: 100k (NO+DA+SV easy retrieval)
+#  - Group A DDSC: 949k (NO+DA+SV hard retrieval)
+
+model:
+  base_model: "ltg/norbert4-xlarge"
+  model_name: "norbert4-xlarge-multidataset-exp1-v1"
+  max_seq_length: 512  # Same as large-v2
+  pooling_mode: "mean"
+
+# Dataset configurations (same as large model)
+datasets:
+  nli:
+    name: "NLI"
+    path: "Fremtind/all-nli-norwegian"
+    format: "(anchor, positive, negative)"
+    samples: "~569k"
+
+  group_b_qa:
+    name: "Group B QA"
+    sources:
+      - "ltg/norquad (Norwegian QA)"
+      - "ltg/norbookqa (Norwegian OpenBookQA)"
+      - "alexandrainst/scandi-qa (NO+DA+SV QA)"
+      - "supervised-da (Danish pairs)"
+      - "PAWS-X Norwegian (paraphrase)"
+    format: "(query, positive)"
+    samples: "~100k (NO+DA+SV)"
+    use_norquad: true
+    use_openbookqa: true
+    use_scandiqa: true
+    use_supervised_da: true
+    use_paws: false
+
+  group_a_ddsc:
+    name: "Group A DDSC"
+    path: "DDSC/nordic-embedding-training-data"
+    language_filter: ["norwegian", "danish", "swedish"]
+    format: "(query, positive, [negative])"
+    samples: "~968k (all Nordic: NO+DA+SV)"
+    note: "40% with hard negatives, 60% with in-batch negatives only"
+
+training:
+  # Batch size - smaller per-device for memory, compensate with grad_accum
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8  # Smaller eval batch for XLarge
+
+  # Multi-dataset sampling strategy
+  multi_dataset_batch_sampler: "ROUND_ROBIN"
+
+  # Gradient accumulation - 8x8=64 effective batch (same as large-v2)
+  gradient_accumulation_steps: 8
+
+  # CRITICAL: Enable gradient checkpointing for XLarge
+  gradient_checkpointing: true
+
+  # Training duration
+  num_train_epochs: 1
+
+  # Learning rate - based on ModernBERT fine-tuning research
+  # ModernBERT used [1e-5 to 1e-4] for BOTH base AND large in GLUE/BEIR sweeps
+  # Fine-tuning does NOT require lower LR for larger models (unlike pre-training)
+  # Using 1.5e-5 (same as Large) - matching ModernBERT fine-tuning practice
+  learning_rate: 1.5e-5
+  warmup_ratio: 0.05  # 5% warmup (ModernBERT retrieval training standard)
+
+  # Regularization
+  weight_decay: 0.01  # Standard for fine-tuning (not the 1e-6 from pre-training)
+  max_grad_norm: 1.0
+
+  # Mixed precision
+  bf16: true
+  fp16: false
+
+  # Evaluation strategy
+  eval_strategy: "steps"
+  eval_steps: 1000
+  save_strategy: "steps"
+  save_steps: 1000
+  save_total_limit: 3
+
+  # Early stopping
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_ddsc_loss"
+  greater_is_better: false
+  early_stopping_patience: 5
+  early_stopping_threshold: 0.0
+
+  # Logging
+  logging_steps: 100
+  logging_first_step: true
+
+  # Data loading
+  dataloader_num_workers: 0
+  dataloader_pin_memory: false
+
+  # Reproducibility
+  seed: 42
+
+lr_scheduler:
+  type: "cosine"
+
+experiment_tracking:
+  output_dir: "models/norbert4-xlarge-multidataset-exp1-v1"
+  run_name: "exp1-xlarge-multidataset-v1-512seq-64batch"
+  report_to: ["tensorboard", "mlflow"]
+  logging_dir: "models/norbert4-xlarge-multidataset-exp1-v1/logs"
+  use_mlflow: true
+  mlflow_experiment_name: "norwegian-embedding-multidataset"
+  mlflow_run_name: "exp1-xlarge-multidataset-v1-512seq-64batch"
+  mlflow_tags:
+    model_type: "embedding"
+    model_size: "xlarge"
+    language: "norwegian"
+    approach: "multidataset"
+    sampling: "round_robin"
+    seq_length: "512"
+    effective_batch: "64"
+    version: "v1"
+    gradient_checkpointing: "true"
+
+# HuggingFace Hub configuration
+advanced:
+  push_to_hub: true
+  hub_model_id: "thivy/norbert4-xlarge-scandinavian-embedding-v1"
+  hub_strategy: "end"
+  hub_private_repo: false
+
+# TRAINING NOTES FOR XLARGE:
+# 1. GRADIENT CHECKPOINTING IS REQUIRED - do not disable
+# 2. Training will be ~30-50% slower than Large due to recomputation
+# 3. Expected memory: ~32-43 GB peak
+# 4. Training time: ~5-6 hours for full epoch (slower than large)
+# 5. Monitor for OOM - if it occurs, reduce batch to 4 with grad_accum 16
+# 6. XLarge may need more epochs to converge - consider 2 epochs if loss plateaus
+#
+# FALLBACK CONFIG (if OOM occurs):
+# - per_device_train_batch_size: 4
+# - gradient_accumulation_steps: 16
+# - This keeps effective batch at 64 but uses less memory

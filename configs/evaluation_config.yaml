@@ -1,0 +1,97 @@
+# MTEB Evaluation Configuration
+# Configuration for evaluating Norwegian embedding models on the Scandinavian Embedding Benchmark
+#
+# Quick Start:
+# 1. Set the model path below
+# 2. Run: uv run python scripts/evaluate_mteb.py
+#
+# That's it! The script will use this config automatically.
+
+# Model to evaluate
+model_path: "models/norbert4-base-multidataset-exp1/final"
+
+# Benchmark selection
+benchmark:
+  # Use official Scandinavian benchmark for Norwegian language evaluation
+  # This ensures results are directly comparable to the SEB leaderboard:
+  # https://kennethenevoldsen.com/scandinavian-embedding-benchmark/
+  name: "MTEB(Scandinavian, v1)"
+  
+  # Languages to filter from the benchmark
+  # - nob: Norwegian Bokmål
+  # - nno: Norwegian Nynorsk
+  languages:
+    - nob
+    - nno
+  
+  # Optional: Specific task types to include (null = all types)
+  # Available types: Classification, Retrieval, Clustering, BitextMining, STS, Reranking
+  task_types: null
+  
+  # Optional: Exclude specific tasks by name
+  exclude_tasks: []
+
+# Model configuration
+model:
+  # Whether to use trust_remote_code when loading models
+  trust_remote_code: true
+  
+  # Optional: Device to use (null = auto-detect)
+  # Options: "cuda", "cpu", "mps" (for Apple Silicon)
+  device: null
+  
+  # Optional: Model kwargs (e.g., for quantization, dtype)
+  model_kwargs: null
+
+# Evaluation settings
+evaluation:
+  # Output directory for results
+  output_dir: "results/mteb"
+  
+  # MTEB verbosity level (0-2)
+  # 0: minimal output
+  # 1: normal output
+  # 2: detailed output with progress bars
+  verbosity: 2
+  
+  # Batch size for encoding (null = model default)
+  batch_size: null
+  
+  # Whether to show detailed per-split results
+  show_detailed_results: true
+  
+  # Whether to calculate and show overall benchmark score
+  show_overall_score: true
+
+# Comparison settings (for comparing multiple models)
+comparison:
+  # Enable comparison mode
+  enabled: false
+  
+  # Models to compare (list of paths)
+  models: []
+  
+  # Display names for models (optional, uses path if not provided)
+  model_names: []
+
+# Cache settings
+cache:
+  # Cache directory for MTEB
+  cache_dir: "~/.cache/mteb"
+  
+  # Whether to download public results for comparison
+  download_public_results: false
+
+# Logging
+logging:
+  # Logging level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  
+  # Log format
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  
+  # Whether to save logs to file
+  save_to_file: false
+  
+  # Log file path (if save_to_file is true)
+  log_file: "logs/mteb_evaluation.log"

@@ -1,30 +1,32 @@
 """
 Evaluate Norwegian embedding models on MTEB (Scandinavian Embedding Benchmark).
 
-This script compares V1 (NLI-only) vs V4 (NLI→STS fine-tuned) on Norwegian tasks.
+This script evaluates Norwegian models on the official Scandinavian Embedding Benchmark (SEB)
+which is now integrated into MTEB as "MTEB(Scandinavian, v1)".
+
+Official benchmark: https://kennethenevoldsen.com/scandinavian-embedding-benchmark/
 
 Usage:
     # Install MTEB first
     uv add mteb
 
-    # Evaluate V1 model (NLI-only)
-    uv run python scripts/evaluate_mteb.py --model models/norbert4-base-nli-norwegian
+    # Evaluate a model with default config
+    uv run python scripts/evaluate_mteb.py --model models/norbert4-base-multidataset-exp1/final
 
-    # Evaluate V4 model (STS fine-tuned, best checkpoint)
-    uv run python scripts/evaluate_mteb.py --model models/norbert4-base-nli-sts-norwegian-v4/checkpoint-90
+    # Use custom config
+    uv run python scripts/evaluate_mteb.py --model models/my-model --config configs/my_eval_config.yaml
 
-    # Compare V1 vs V4
-    uv run python scripts/evaluate_mteb.py --compare \
-        --model1 models/norbert4-base-nli-norwegian \
-        --model2 models/norbert4-base-nli-sts-norwegian-v4/checkpoint-90
+    # Results will be comparable to models on the SEB leaderboard
 """
 
 import argparse
 import logging
 from pathlib import Path
 import json
+import yaml
 
 try:
+    import mteb
     from mteb import MTEB
     from sentence_transformers import SentenceTransformer
 except ImportError:
@@ -32,98 +34,236 @@ except ImportError:
     print("Install with: pip install mteb sentence-transformers")
     exit(1)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Logger will be configured after loading config
 logger = logging.getLogger(__name__)
 
 
-# Norwegian tasks from MTEB/SEB (Scandinavian Embedding Benchmark)
-# Based on actual MTEB task list (verified December 2025)
-# 30 Norwegian tasks total - using key representative tasks below
-NORWEGIAN_TASKS = {
-    "classification": [
-        # Text classification tasks
-        "NoRecClassification.v2",  # Norwegian Reviews Classification
-        "NorwegianParliamentClassification.v2",  # Parliament speeches classification
-        "NordicLangClassification",  # Nordic language identification
-        "ScandiSentClassification",  # Scandinavian sentiment
-        "ScalaClassification",  # Scala classification
-    ],
-    "retrieval": [
-        # Question-answer retrieval
-        "NorQuadRetrieval",  # Norwegian Wikipedia QA
-        "SNLRetrieval",  # Store Norske Leksikon retrieval
-        "WebFAQRetrieval",  # Web FAQ retrieval
-    ],
-    "clustering": [
-        # Document clustering by topic
-        "SNLHierarchicalClusteringS2S",  # SNL sentence clustering
-        "SNLHierarchicalClusteringP2P",  # SNL paragraph clustering
-        "VGHierarchicalClusteringS2S",  # VG News sentence clustering
-        "VGHierarchicalClusteringP2P",  # VG News paragraph clustering
-    ],
-    "bitext_mining": [
-        # Cross-lingual text alignment
-        "NorwegianCourtsBitextMining",  # Norwegian courts bitext
-        "Tatoeba",  # Tatoeba sentence pairs (includes Norwegian)
-    ],
-}
+def load_config(config_path: str = None):
+    """
+    Load evaluation configuration from YAML file.
+    
+    Args:
+        config_path: Path to config file. If None, uses default configs/evaluation_config.yaml
+    
+    Returns:
+        Dictionary with configuration
+    """
+    if config_path is None:
+        config_path = Path(__file__).parent.parent / "configs" / "evaluation_config.yaml"
+    else:
+        config_path = Path(config_path)
+    
+    if not config_path.exists():
+        logger.warning(f"Config file not found: {config_path}")
+        logger.warning("Using default configuration")
+        return get_default_config()
+    
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    logger.info(f"Loaded configuration from: {config_path}")
+    return config
 
 
-def get_all_norwegian_tasks():
-    """Get all Norwegian task names from MTEB."""
-    all_tasks = []
-    for category, tasks in NORWEGIAN_TASKS.items():
-        all_tasks.extend(tasks)
-    return all_tasks
+def get_default_config():
+    """Get default configuration if config file is not found."""
+    return {
+        'benchmark': {
+            'name': 'MTEB(Scandinavian, v1)',
+            'languages': ['nob', 'nno'],
+            'task_types': None,
+            'exclude_tasks': []
+        },
+        'model': {
+            'trust_remote_code': True,
+            'device': None,
+            'model_kwargs': None
+        },
+        'evaluation': {
+            'output_dir': 'results/mteb',
+            'verbosity': 2,
+            'batch_size': None,
+            'show_detailed_results': True,
+            'show_overall_score': True
+        },
+        'cache': {
+            'cache_dir': '~/.cache/mteb',
+            'download_public_results': False
+        },
+        'logging': {
+            'level': 'INFO',
+            'format': '%(asctime)s - %(levelname)s - %(message)s',
+            'save_to_file': False,
+            'log_file': 'logs/mteb_evaluation.log'
+        }
+    }
 
 
-def evaluate_model(model_path: str, output_dir: str = "results/mteb", tasks=None):
+def configure_logging(config):
+    """Configure logging based on config."""
+    log_config = config.get('logging', {})
+    
+    # Set level
+    level = getattr(logging, log_config.get('level', 'INFO'))
+    
+    # Configure handlers
+    handlers = [logging.StreamHandler()]
+    
+    if log_config.get('save_to_file', False):
+        log_file = Path(log_config.get('log_file', 'logs/mteb_evaluation.log'))
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file))
+    
+    logging.basicConfig(
+        level=level,
+        format=log_config.get('format', '%(asctime)s - %(levelname)s - %(message)s'),
+        handlers=handlers,
+        force=True  # Reconfigure if already configured
+    )
+
+
+def get_norwegian_benchmark_tasks(config):
+    """
+    Get Norwegian tasks from the official Scandinavian Embedding Benchmark.
+    
+    Args:
+        config: Configuration dictionary
+    
+    Returns all tasks from MTEB(Scandinavian, v1) that include Norwegian (nob/nno).
+    This ensures results are directly comparable to the SEB leaderboard.
+    
+    Tasks included (13 total):
+    - Classification (6): NoRecClassification, NorwegianParliamentClassification, 
+                          NordicLangClassification, ScalaClassification,
+                          MassiveIntentClassification, MassiveScenarioClassification
+    - Retrieval (2): NorQuadRetrieval, SNLRetrieval
+    - Clustering (4): SNLHierarchicalClusteringS2S, SNLHierarchicalClusteringP2P,
+                      VGHierarchicalClusteringS2S, VGHierarchicalClusteringP2P
+    - BitextMining (1): NorwegianCourtsBitextMining
+    """
+    benchmark_config = config.get('benchmark', {})
+    
+    # Get official Scandinavian benchmark
+    benchmark_name = benchmark_config.get('name', 'MTEB(Scandinavian, v1)')
+    benchmark = mteb.get_benchmark(benchmark_name)
+    
+    # Get language filter
+    languages = benchmark_config.get('languages', ['nob', 'nno'])
+    
+    # Filter for tasks with Norwegian language support
+    norwegian_tasks = [
+        task for task in benchmark.tasks 
+        if any(lang in languages for lang in task.metadata.languages)
+    ]
+    
+    # Filter by task type if specified
+    task_types = benchmark_config.get('task_types')
+    if task_types:
+        norwegian_tasks = [
+            task for task in norwegian_tasks
+            if task.metadata.type in task_types
+        ]
+    
+    # Exclude specific tasks if specified
+    exclude_tasks = benchmark_config.get('exclude_tasks', [])
+    if exclude_tasks:
+        norwegian_tasks = [
+            task for task in norwegian_tasks
+            if task.metadata.name not in exclude_tasks
+        ]
+    
+    logger.info(f"Loaded {len(norwegian_tasks)} Norwegian tasks from {benchmark_name}")
+    logger.info("Tasks by category:")
+    
+    # Group by type for logging
+    from collections import defaultdict
+    by_type = defaultdict(list)
+    for task in norwegian_tasks:
+        by_type[task.metadata.type].append(task.metadata.name)
+    
+    for task_type in sorted(by_type.keys()):
+        logger.info(f"  {task_type}: {len(by_type[task_type])} tasks")
+    
+    return norwegian_tasks
+
+
+def evaluate_model(model_path: str, config: dict, tasks=None):
     """
     Evaluate a model on Norwegian MTEB tasks.
 
     Args:
         model_path: Path to sentence transformer model
-        output_dir: Directory to save results
-        tasks: List of task names (None = all Norwegian tasks)
+        config: Configuration dictionary
+        tasks: List of task objects (None = use benchmark tasks from config)
     """
     logger.info(f"\n{'='*70}")
     logger.info(f"MTEB EVALUATION: {model_path}")
     logger.info(f"{'='*70}\n")
 
+    # Get configuration sections
+    model_config = config.get('model', {})
+    eval_config = config.get('evaluation', {})
+    cache_config = config.get('cache', {})
+
     # Load model
     logger.info(f"Loading model from: {model_path}")
-    model = SentenceTransformer(model_path, trust_remote_code=True)
-    logger.info(f"✓ Model loaded")
+    model_kwargs = {
+        'trust_remote_code': model_config.get('trust_remote_code', True)
+    }
+    
+    # Add device if specified
+    if model_config.get('device'):
+        model_kwargs['device'] = model_config['device']
+    
+    # Add additional model kwargs if specified
+    if model_config.get('model_kwargs'):
+        model_kwargs.update(model_config['model_kwargs'])
+    
+    model = SentenceTransformer(model_path, **model_kwargs)
+    logger.info("✓ Model loaded")
     logger.info(f"  Embedding dimension: {model.get_sentence_embedding_dimension()}")
 
     # Get tasks to run
     if tasks is None:
-        tasks = get_all_norwegian_tasks()
-        logger.info(f"Running all Norwegian tasks: {len(tasks)} tasks")
+        task_objects = get_norwegian_benchmark_tasks(config)
+        logger.info(f"Running Norwegian benchmark: {len(task_objects)} tasks")
     else:
-        logger.info(f"Running specified tasks: {tasks}")
+        # If task objects provided, use them directly
+        task_objects = tasks
+        logger.info(f"Running specified tasks: {len(task_objects)} tasks")
 
     # Create output directory
-    output_path = Path(output_dir) / Path(model_path).name
+    output_dir = eval_config.get('output_dir', 'results/mteb')
+    # Use full path to avoid collisions when multiple models have same directory name (e.g., "final")
+    model_path_obj = Path(model_path)
+    if model_path_obj.name == "final" and model_path_obj.parent.name:
+        # If the model is in a "final" directory, use parent name to differentiate
+        # e.g., models/norbert4-base-multidataset-exp1/final -> norbert4-base-multidataset-exp1
+        output_name = model_path_obj.parent.name
+    else:
+        output_name = model_path_obj.name
+    
+    output_path = Path(output_dir) / output_name
     output_path.mkdir(parents=True, exist_ok=True)
     logger.info(f"Results will be saved to: {output_path}")
 
     # Run evaluation
     logger.info("\nStarting MTEB evaluation...")
-    import mteb
 
-    # Get task objects (new MTEB API)
-    task_objects = mteb.get_tasks(tasks=tasks, languages=["nob", "nno"])
-    evaluation = MTEB(tasks=task_objects)
+    # Create MTEB evaluation object with task objects (not task names)
+    evaluation = MTEB(tasks=task_objects if isinstance(task_objects, list) else [task_objects])
+
+    # Get encode kwargs if specified
+    encode_kwargs = {}
+    if eval_config.get('batch_size'):
+        encode_kwargs['batch_size'] = eval_config['batch_size']
 
     try:
         results = evaluation.run(
             model,
             output_folder=str(output_path),
-            verbosity=2
+            verbosity=eval_config.get('verbosity', 2),
+            encode_kwargs=encode_kwargs if encode_kwargs else None
         )
 
         logger.info("\n" + "="*70)
@@ -131,17 +271,79 @@ def evaluate_model(model_path: str, output_dir: str = "results/mteb", tasks=None
         logger.info("="*70)
         logger.info(f"\nResults saved to: {output_path}")
 
-        # Print summary
-        logger.info("\n" + "-"*70)
-        logger.info("RESULTS SUMMARY")
-        logger.info("-"*70)
+        # Print summary if enabled
+        if eval_config.get('show_detailed_results', True):
+            logger.info("\n" + "-"*70)
+            logger.info("RESULTS SUMMARY")
+            logger.info("-"*70)
 
-        for task_name, task_results in results.items():
-            logger.info(f"\n{task_name}:")
-            if isinstance(task_results, dict):
-                for metric, value in task_results.items():
-                    if isinstance(value, float):
-                        logger.info(f"  {metric}: {value:.4f}")
+        # Collect scores for overall average
+        all_scores = []
+        task_scores = {}
+
+        # Handle both list and dict results (MTEB API changes)
+        if isinstance(results, list):
+            # New MTEB API returns list of results
+            for task_result in results:
+                if hasattr(task_result, 'task_name'):
+                    task_name = task_result.task_name
+                    if eval_config.get('show_detailed_results', True):
+                        logger.info(f"\n{task_name}:")
+                    if hasattr(task_result, 'scores') and isinstance(task_result.scores, dict):
+                        task_main_scores = []
+                        for split, metrics in task_result.scores.items():
+                            if eval_config.get('show_detailed_results', True):
+                                logger.info(f"  {split}:")
+                            if isinstance(metrics, dict):
+                                # Get main metric for the split
+                                main_metric = None
+                                if 'main_score' in metrics:
+                                    main_metric = metrics['main_score']
+                                elif 'ndcg_at_10' in metrics:
+                                    main_metric = metrics['ndcg_at_10']
+                                elif 'v_measure' in metrics:
+                                    main_metric = metrics['v_measure']
+                                elif 'accuracy' in metrics:
+                                    main_metric = metrics['accuracy']
+                                elif 'f1' in metrics:
+                                    main_metric = metrics['f1']
+                                
+                                if main_metric is not None:
+                                    task_main_scores.append(main_metric)
+                                
+                                if eval_config.get('show_detailed_results', True):
+                                    for metric, value in metrics.items():
+                                        if isinstance(value, (float, int)):
+                                            logger.info(f"    {metric}: {value:.4f}")
+                        
+                        # Average score for this task across splits
+                        if task_main_scores:
+                            avg_score = sum(task_main_scores) / len(task_main_scores)
+                            task_scores[task_name] = avg_score
+                            all_scores.append(avg_score)
+                            
+        elif isinstance(results, dict):
+            # Old MTEB API returns dict
+            for task_name, task_results in results.items():
+                if eval_config.get('show_detailed_results', True):
+                    logger.info(f"\n{task_name}:")
+                if isinstance(task_results, dict):
+                    for metric, value in task_results.items():
+                        if isinstance(value, float):
+                            if eval_config.get('show_detailed_results', True):
+                                logger.info(f"  {metric}: {value:.4f}")
+                            all_scores.append(value)
+
+        # Print overall score if enabled
+        if all_scores and eval_config.get('show_overall_score', True):
+            overall_score = sum(all_scores) / len(all_scores)
+            logger.info("\n" + "="*70)
+            logger.info("OVERALL SCORE (Average across all tasks)")
+            logger.info("="*70)
+            logger.info(f"  {overall_score:.4f}")
+            logger.info("\n  This score is comparable to the Scandinavian Embedding Benchmark")
+            logger.info("  leaderboard: https://kennethenevoldsen.com/scandinavian-embedding-benchmark/")
+            logger.info("="*70)
 
         return results
 
@@ -249,70 +451,87 @@ def compare_models(model1_path: str, model2_path: str, output_dir: str = "result
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Evaluate Norwegian embedding models on MTEB"
+        description="Evaluate Norwegian embedding models on MTEB (Scandinavian Embedding Benchmark)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Simplest: just set model_path in configs/evaluation_config.yaml and run:
+  python scripts/evaluate_mteb.py
+  
+  # Override model from command line:
+  python scripts/evaluate_mteb.py --model models/my-model
+  
+  # Use custom config file:
+  python scripts/evaluate_mteb.py --config configs/custom_eval.yaml
+  
+  # Override output directory:
+  python scripts/evaluate_mteb.py --output-dir results/custom
+        """
     )
 
     parser.add_argument(
         "--model",
         type=str,
-        help="Path to model to evaluate"
+        default=None,
+        help="Path to model to evaluate (overrides config)"
     )
 
     parser.add_argument(
-        "--compare",
-        action="store_true",
-        help="Compare two models"
-    )
-
-    parser.add_argument(
-        "--model1",
+        "--config",
         type=str,
-        help="Path to first model (for comparison)"
-    )
-
-    parser.add_argument(
-        "--model2",
-        type=str,
-        help="Path to second model (for comparison)"
+        default=None,
+        help="Path to config file (default: configs/evaluation_config.yaml)"
     )
 
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="results/mteb",
-        help="Directory to save results (default: results/mteb)"
+        default=None,
+        help="Directory to save results (overrides config)"
     )
 
     parser.add_argument(
-        "--tasks",
-        nargs="+",
-        help="Specific tasks to run (default: all Norwegian tasks)"
+        "--verbosity",
+        type=int,
+        default=None,
+        choices=[0, 1, 2],
+        help="MTEB verbosity level (overrides config)"
     )
 
     args = parser.parse_args()
 
-    if args.compare:
-        if not args.model1 or not args.model2:
-            logger.error("Comparison mode requires --model1 and --model2")
-            return
+    # Load configuration
+    config = load_config(args.config)
+    
+    # Configure logging based on config
+    configure_logging(config)
 
-        # Evaluate both models if results don't exist
-        for model_path in [args.model1, args.model2]:
-            results_path = Path(args.output_dir) / Path(model_path).name
-            if not results_path.exists():
-                logger.info(f"Evaluating {model_path}...")
-                evaluate_model(model_path, args.output_dir, args.tasks)
-
-        # Compare
-        compare_models(args.model1, args.model2, args.output_dir)
-
-    elif args.model:
-        # Single model evaluation
-        evaluate_model(args.model, args.output_dir, args.tasks)
-
-    else:
-        logger.error("Specify either --model or --compare mode")
+    # Get model path from args or config
+    model_path = args.model or config.get('model_path')
+    
+    if not model_path:
+        logger.error("No model specified!")
+        logger.error("Either:")
+        logger.error("  1. Set 'model_path' in configs/evaluation_config.yaml, OR")
+        logger.error("  2. Use --model argument")
         parser.print_help()
+        return
+
+    # Override config with command-line arguments
+    if args.output_dir:
+        config['evaluation']['output_dir'] = args.output_dir
+    
+    if args.verbosity is not None:
+        config['evaluation']['verbosity'] = args.verbosity
+
+    # Evaluate model
+    logger.info("Using configuration:")
+    logger.info(f"  Model: {model_path}")
+    logger.info(f"  Benchmark: {config['benchmark']['name']}")
+    logger.info(f"  Languages: {', '.join(config['benchmark']['languages'])}")
+    logger.info(f"  Output directory: {config['evaluation']['output_dir']}")
+    
+    evaluate_model(model_path, config)
 
 
 if __name__ == "__main__":
