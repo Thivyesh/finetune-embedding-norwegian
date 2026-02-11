@@ -48,7 +48,91 @@ finetune-embedding-norwegian/
 └── main.py                          # Legacy single-dataset trainer
 ```
 
-## 🚀 Quick Start
+## � Prerequisites
+
+### Azure ML Compute Setup
+
+This project can be trained on an Azure Machine Learning VM. To connect to your Azure ML VM:
+
+**Connection Details (replace with your VM's values):**
+```
+Compute: azure-ml-vm
+Username: azureuser
+Public IP: <YOUR_VM_PUBLIC_IP>    # Get from Azure Portal
+Private IP: 10.0.0.4
+SSH Port: 50000                   # Default SSH port for Azure ML VMs
+Private Key: ~/.ssh/est_test_key_pair.pem
+```
+
+**Example (your current VM):**
+```
+Public IP: 20.8.94.92
+SSH Port: 50000
+```
+
+**Setup SSH Connection (Windows/Mac/Linux):**
+
+1. **Place your SSH private key in the correct location:**
+   ```bash
+   # Windows
+   C:\Users\<username>\.ssh\est_test_key_pair.pem
+   
+   # Mac/Linux
+   ~/.ssh/est_test_key_pair.pem
+   ```
+
+2. **Fix SSH key permissions (required):**
+   ```bash
+   # macOS/Linux
+   chmod 600 ~/.ssh/est_test_key_pair.pem
+   
+   # Windows (PowerShell as Admin)
+   icacls "C:\Users\<username>\.ssh\est_test_key_pair.pem" /inheritance:r /grant:r "$($env:USERNAME):(F)"
+   ```
+
+3. **Connect to the VM:**
+   ```bash
+   # Replace 20.8.94.92 with your VM's public IP
+   ssh -i ~/.ssh/est_test_key_pair.pem azureuser@<YOUR_VM_PUBLIC_IP> -p 50000
+   
+   # Example with our current VM:
+   ssh -i ~/.ssh/est_test_key_pair.pem azureuser@20.8.94.92 -p 50000
+   ```
+
+4. **Configure SSH Config (optional, for convenience):**
+   
+   Add to `~/.ssh/config` (replace <YOUR_VM_PUBLIC_IP> with your VM's IP):
+   ```
+   Host azure-ml-vm
+       HostName <YOUR_VM_PUBLIC_IP>
+       User azureuser
+       Port 50000
+       IdentityFile ~/.ssh/est_test_key_pair.pem
+       StrictHostKeyChecking no
+   ```
+   
+   Example with our current VM:
+   ```
+   Host azure-ml-vm
+       HostName 20.8.94.92
+       User azureuser
+       Port 50000
+       IdentityFile ~/.ssh/est_test_key_pair.pem
+       StrictHostKeyChecking no
+   ```
+   
+   Then connect with:
+   ```bash
+   ssh azure-ml-vm
+   ```
+
+**Troubleshooting SSH Connection:**
+- Verify the VM is running in Azure Portal
+- Check that port 50000 is open in Network Security Group (NSG) inbound rules
+- Ensure you're connected to the correct network/VPN if required
+- Verify SSH key is in the correct location with proper permissions
+
+## �🚀 Quick Start
 
 ### 1. Install Dependencies
 
