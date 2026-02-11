@@ -54,7 +54,7 @@ datasets:
     use_openbookqa: true
     use_scandiqa: true
     use_supervised_da: true
-    use_paws: false
+    use_paws: true
 
   group_a_ddsc:
     name: "Group A DDSC"
