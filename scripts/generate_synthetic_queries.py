@@ -10,25 +10,6 @@ from llama_index.core.node_parser import SentenceSplitter
 import tiktoken
 load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
-print("=" * 60)
-print("CURRENT CONFIGURATION")
-print("=" * 60)
-print(f"AZURE_ENDPOINT: {os.getenv('AZURE_AI_ENDPOINT')}")
-print(f"AZURE_API_KEY: {os.getenv('AZURE_AI_API_KEY')[:10]}... (truncated)")
-print(f"AZURE_DEPLOYMENT_NAME: {os.getenv('AZURE_AI_DEPLOYMENT_NAME')}")
-print("=" * 60)
-
-print("\n🔍 Please verify in Azure Portal:")
-print("1. Go to your Azure AI Foundry resource")
-print("2. Navigate to 'Models + Endpoints' or 'Deployments'")
-print("3. Find your Claude deployment")
-print("4. Copy EXACT endpoint URL and deployment name")
-print("\nExpected formats:")
-print("  Endpoint: https://<resource-name>.services.ai.azure.com/antrhopic")
-print("  OR:       https://<resource-name>.inference.ai.azure.com")
-print("  OR:       https://<resource-name>.openai.azure.com")
-print("  Deployment: claude-sonnet-4-5 (or your custom name)")
-
 
 NORWEGIAN_QA_PROMPT = """\
 Kontekst informasjon er nedenfor.
@@ -100,11 +81,13 @@ def load_documents_from_jsonl(
             # Kombinér 'tittel' og 'innhold' - begge inneholder tekst
             tittel = data.get('tittel', '')
             innhold = data.get('innhold', '')
+            content = data.get('content', '')  # fallback for andre datasett
             
             # Bruk innhold hvis det finnes, ellers tittel
             # (de ser ut til å være like basert på eksempelet)
             text = innhold if innhold and innhold.strip() else tittel
-            
+            if not text and content:
+                text = content
             # Skip tomme dokumenter
             if not text or not text.strip():
                 skipped_empty += 1
@@ -174,7 +157,7 @@ def analyze_dataset(file_path: Path, sample_size: int = None):
             data = json.loads(line)
             
             # Bruk innhold som primær kilde
-            text = data.get('innhold', '') or data.get('tittel', '')
+            text = data.get('innhold', '') or data.get('tittel', '') or data.get('content')
             
             if text:
                 tokens = count_tokens(text)
@@ -301,13 +284,20 @@ def main():
     RAW_DIR = DATA_DIR / "raw"
     PROCESSED_DIR = DATA_DIR / "processed"
     
-    TRAIN_FILE = RAW_DIR / "dataset_train.jsonl"
-    TEST_FILE = RAW_DIR / "dataset_test.jsonl"
-    TRAIN_OUTPUT = PROCESSED_DIR / "train_dataset.json"
-    TEST_OUTPUT = PROCESSED_DIR / "test_dataset.json"
+    # dataset_train.jsonl og dataset_test.jsonl skal inneholde dokumentene som skal brukes for henholdsvis train og test. Disse må legges i data/raw/ før kjøring.
+    #TRAIN_FILE = RAW_DIR / "dataset_train.jsonl"
+    #TEST_FILE = RAW_DIR / "dataset_test.jsonl"
+    #TRAIN_OUTPUT = PROCESSED_DIR / "train_dataset_adv.json"
+    #TEST_OUTPUT = PROCESSED_DIR / "test_dataset_adv.json"
+
+    # eti_train.jsonl og eti_test.jsonl skal inneholde dokumentene som skal brukes for henholdsvis train og test. Disse må legges i data/raw/ før kjøring.
+    TRAIN_FILE = RAW_DIR / "eti_train.jsonl"
+    TEST_FILE = RAW_DIR / "eti_test.jsonl"
+    TRAIN_OUTPUT = PROCESSED_DIR / "eti_train_adv.json"
+    TEST_OUTPUT = PROCESSED_DIR / "eti_test_adv.json"
     
     # LlamaIndex konfigurasjon
-    NUM_QUESTIONS_PER_CHUNK = 2  # Antall spørsmål per chunk
+    NUM_QUESTIONS_PER_CHUNK = 20  # Antall spørsmål per chunk
     
     # Chunking konfigurasjon (valgfritt)
 
@@ -320,7 +310,9 @@ def main():
         AZURE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
         AZURE_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
         AZURE_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
-        AZURE_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o-mini")
+        AZURE_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o")
+        AZURE_DEPLOYMENT_NAME_MINI = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME_MINI", "gpt-4o-mini")
+
         if not AZURE_API_KEY:
             print("❌ AZURE_API_KEY ikke satt")
             return
@@ -380,6 +372,14 @@ def main():
         print(f"   Azure Endpoint: {AZURE_ENDPOINT}")
         print(f"   Deployment: {AZURE_DEPLOYMENT_NAME}")
         print(f"   API Version: {AZURE_API_VERSION}")
+        llm_mini = AzureOpenAI(
+            model=AZURE_DEPLOYMENT_NAME_MINI,
+            deployment_name=AZURE_DEPLOYMENT_NAME_MINI,
+            api_key=AZURE_API_KEY,
+            azure_endpoint=AZURE_ENDPOINT,
+            api_version=AZURE_API_VERSION,
+            temperature=0.7,
+        )
         llm = AzureOpenAI(
             model=AZURE_DEPLOYMENT_NAME,
             deployment_name=AZURE_DEPLOYMENT_NAME,
@@ -388,6 +388,7 @@ def main():
             api_version=AZURE_API_VERSION,
             temperature=0.7,
         )
+
     elif os.getenv("LLM_PROVIDER", "anthropic").lower() == "anthropic":
         print(f"   Azure Endpoint: {AZURE_AI_ENDPOINT}")
         print(f"   Deployment: {AZURE_AI_DEPLOYMENT_NAME}")
@@ -402,7 +403,8 @@ def main():
             max_tokens=4096,
             temperature=0.7,
         )
-
+        #kun 1 modell så bruker samme for mini og full
+        llm_mini = LangChainLLM(llm=langchain_llm)
         llm = LangChainLLM(llm=langchain_llm)
     else:
         print("❌ Ugyldig LLM_PROVIDER i .env. Sett til 'openai' eller 'anthropic'.")
@@ -440,9 +442,9 @@ def main():
     print(f"✓ Laget {len(train_nodes)} nodes")
     
     print(f"Genererer QA-par ({NUM_QUESTIONS_PER_CHUNK} spørsmål per chunk)...")
-    
+
     train_dataset = generate_qa_embedding_pairs(
-        llm=llm,
+        llm=llm_mini,
         nodes=train_nodes,
         num_questions_per_chunk=NUM_QUESTIONS_PER_CHUNK,
         qa_generate_prompt_tmpl=NORWEGIAN_QA_PROMPT,
@@ -474,14 +476,14 @@ def main():
     print(f"✓ Laget {len(test_nodes)} nodes")
     
     print(f"Genererer QA-par ({NUM_QUESTIONS_PER_CHUNK} spørsmål per chunk)...")
-    
+
     test_dataset = generate_qa_embedding_pairs(
         llm=llm,
         nodes=test_nodes,
         num_questions_per_chunk=NUM_QUESTIONS_PER_CHUNK,
         qa_generate_prompt_tmpl=NORWEGIAN_QA_PROMPT,
     )
-    train_dataset.save_json(str(TRAIN_OUTPUT))
+    test_dataset.save_json(str(TEST_OUTPUT))
     print(f"✓ Genererte {len(test_dataset.queries)} test queries")
     print(f"✓ Lagret til {TEST_OUTPUT}")
     
