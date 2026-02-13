@@ -137,6 +137,47 @@ def load_eti() -> dict[str, Dataset]:
     
     return splits
 
+def save_as_parquet(dataset_dict: DatasetDict, output_dir: str, max_shard_size: str = "500MB"):
+    """
+    Save DatasetDict as sharded parquet files with HuggingFace naming convention.
+    
+    Args:
+        dataset_dict: DatasetDict to save
+        output_dir: Directory to save parquet files
+        max_shard_size: Maximum size per shard (e.g., "500MB", "1GB")
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    logger.info(f"Saving as sharded parquet to {output_path}...")
+    
+    for split_name, dataset in dataset_dict.items():
+        # Calculate number of shards based on dataset size
+        num_shards = dataset._estimate_nbytes() // (500 * 1024 * 1024) + 1  # Default ~500MB per shard
+        num_shards = max(1, min(num_shards, 1000))  # Between 1 and 1000 shards
+        
+        logger.info(f"  Saving {split_name} split ({len(dataset):,} rows) as {num_shards} shard(s)...")
+        
+        # Save as sharded parquet
+        for shard_idx in range(num_shards):
+            # Calculate shard range
+            shard_size = len(dataset) // num_shards
+            start_idx = shard_idx * shard_size
+            end_idx = start_idx + shard_size if shard_idx < num_shards - 1 else len(dataset)
+            
+            # Create shard
+            shard = dataset.select(range(start_idx, end_idx))
+            
+            # HuggingFace naming convention: {split}-{shard_idx:05d}-of-{num_shards:05d}.parquet
+            filename = f"{split_name}-{shard_idx:05d}-of-{num_shards:05d}.parquet"
+            parquet_file = output_path / filename
+            
+            shard.to_parquet(str(parquet_file))
+            logger.info(f"    ✓ {filename} ({len(shard):,} rows)")
+        
+        logger.info(f"  ✓ {split_name} complete: {num_shards} shard(s)")
+    
+    logger.info(f"✓ All parquet shards saved to {output_path}")
 
 def print_summary(dd: DatasetDict) -> None:
     """Print a detailed summary of the dataset."""
@@ -179,6 +220,7 @@ def add_eti_to_existing_dataset(
     push: bool = False,
     private: bool = False,
     save_local: str = None,
+    save_parquet: str = None,
     create_pr: bool = False  # ← Nytt parameter
 ) -> DatasetDict:
     """
@@ -249,6 +291,8 @@ def add_eti_to_existing_dataset(
         Path(save_local).parent.mkdir(parents=True, exist_ok=True)
         updated_dd.save_to_disk(save_local)
         logger.info(f"✓ Saved to {save_local}")
+    if save_parquet:
+        save_as_parquet(updated_dd, save_parquet)
     
     # Push if requested
     if push:
@@ -292,7 +336,12 @@ Examples:
   python scripts/update_huggingface_dataset.py --push
         """
     )
-    
+    parser.add_argument(
+        "--save-parquet",
+        type=str,
+        default=None,
+        help="Save dataset as parquet files to this directory"
+    )
     parser.add_argument(
         "--repo-id",
         default="thivy/scandinavian-embedding-training-data",
@@ -328,6 +377,7 @@ Examples:
             push=args.push,
             private=args.private,
             save_local=args.save_local,
+            save_parquet=args.save_parquet,
             create_pr=args.create_pr
         )
     except Exception as e:
