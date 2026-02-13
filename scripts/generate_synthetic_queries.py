@@ -11,7 +11,7 @@ import tiktoken
 load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 
-NORWEGIAN_QA_PROMPT = """\
+NORWEGIAN_QA_PROMPT_GENERAL = """\
 Kontekst informasjon er nedenfor.
 
 ---------------------
@@ -28,6 +28,33 @@ Spørsmålene skal:
 - Være spørsmål en vanlig bruker ville stilt
 
 Generer kun spørsmålene, ett per linje, uten nummerering eller annen formatering.
+"""
+NORWEGIAN_QA_PROMPT = """\
+Kontekst informasjon er nedenfor.
+
+---------------------
+{context_str}
+---------------------
+
+Gitt kontekst informasjonen og ingen forhåndskunnskap, generer {num_questions_per_chunk} spørsmål basert på konteksten.
+
+Spørsmålene skal:
+- Være på norsk
+- Være spørsmål som kan besvares av informasjonen i konteksten
+- Være varierte og dekke ulike aspekter av konteksten
+- Være konkrete og spesifikke
+- Være spørsmål en vanlig bruker ville stilt
+- Bruker er en forelder med barn med sammensatte helseutfordringer med behov for koordinerte tjenester; fokuser på spørsmål som er relevante for denne målgruppen
+- Bruker er ikke ekspert, unngå tekniske spørsmål og fokusér på praktiske og forståelige spørsmål en vanlig bruker ville stilt
+
+Generer kun spørsmålene, ett per linje, uten nummerering eller annen formatering.
+Eksempel på spørsmål en bruker kunne stilt basert på konteksten:
+- Hva slags økonomisk støtte finnes for familier med barn med nedsatt funksjon og stort omsorgsbehov?
+- Hva er individuell plan og ansvarsgruppe?
+- Hvordan kan vi tilpasse boligen til barnets behov?
+- Hva er Brukerstyrt personlig assistanse (BPA)?
+
+
 """
 
 def count_tokens(text: str, model: str = "gpt-4") -> int:
@@ -293,8 +320,8 @@ def main():
     # eti_train.jsonl og eti_test.jsonl skal inneholde dokumentene som skal brukes for henholdsvis train og test. Disse må legges i data/raw/ før kjøring.
     TRAIN_FILE = RAW_DIR / "eti_train.jsonl"
     TEST_FILE = RAW_DIR / "eti_test.jsonl"
-    TRAIN_OUTPUT = PROCESSED_DIR / "eti_train_adv.json"
-    TEST_OUTPUT = PROCESSED_DIR / "eti_test_adv.json"
+    TRAIN_OUTPUT = PROCESSED_DIR / "eti_train_smpl.json"
+    TEST_OUTPUT = PROCESSED_DIR / "eti_test_smpl.json"
     
     # LlamaIndex konfigurasjon
     NUM_QUESTIONS_PER_CHUNK = 20  # Antall spørsmål per chunk

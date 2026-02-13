@@ -296,6 +296,73 @@ def load_ddsc(
         logger.info(f"  ✓ DDSC {k}: {len(v):,}")
     return splits
 
+def load_eti() -> dict[str, Dataset]:
+    """
+    Load ETI (Norwegian health/welfare) dataset - both simple and advanced.
+    
+    Returns:
+        Dictionary with 'train', 'dev', and 'test' HuggingFace Dataset splits
+    """
+    logger.info("Loading ETI dataset (smpl + adv)...")
+    
+    # Load both types
+    all_splits = {"train": [], "dev": [], "test": []}
+    
+    for dataset_type in ["smpl", "adv"]:
+        train_file = Path(f"data/eti/eti_train_{dataset_type}.json")
+        test_file = Path(f"data/eti/eti_test_{dataset_type}.json")
+        
+        if not train_file.exists():
+            logger.warning(f"  ETI train {dataset_type} not found at {train_file} – skipping")
+            continue
+        if not test_file.exists():
+            logger.warning(f"  ETI test {dataset_type} not found at {test_file} – skipping")
+            continue
+        
+        # Load data
+        with open(train_file, 'r', encoding='utf-8') as f:
+            train_data = json.load(f)
+        
+        with open(test_file, 'r', encoding='utf-8') as f:
+            test_data = json.load(f)
+        
+        # Convert to HuggingFace Dataset
+        train_ds = Dataset.from_dict({
+            "anchor": [item["anchor"] for item in train_data],
+            "positive": [item["context"] for item in train_data],
+            "negative": [None] * len(train_data),
+            "source": [f"eti-{dataset_type}"] * len(train_data),
+            "language": ["no"] * len(train_data),
+            "task_type": ["qa"] * len(train_data),
+        })
+        
+        test_ds = Dataset.from_dict({
+            "anchor": [item["anchor"] for item in test_data],
+            "positive": [item["context"] for item in test_data],
+            "negative": [None] * len(test_data),
+            "source": [f"eti-{dataset_type}"] * len(test_data),
+            "language": ["no"] * len(test_data),
+            "task_type": ["qa"] * len(test_data),
+        })
+        
+        # Split test into dev/test (50/50)
+        mid = len(test_ds) // 2
+        
+        all_splits["train"].append(train_ds)
+        all_splits["dev"].append(test_ds.select(range(mid)))
+        all_splits["test"].append(test_ds.select(range(mid, len(test_ds))))
+        
+        logger.info(f"  ETI {dataset_type} train: {len(train_ds):,}")
+    
+    # Concatenate all splits
+    splits = {}
+    for split_name, datasets in all_splits.items():
+        if datasets:
+            splits[split_name] = concatenate_datasets(datasets)
+            logger.info(f"  ETI combined {split_name}: {len(splits[split_name]):,}")
+    
+    return splits
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Combine everything
