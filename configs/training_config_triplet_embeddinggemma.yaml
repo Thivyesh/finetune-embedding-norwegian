@@ -1,0 +1,132 @@
+# =============================================================================
+# TRAINING CONFIGURATION: EmbeddingGemma-300M Triplet Fine-tuning
+# =============================================================================
+# Fine-tune google/embeddinggemma-300m on ETI triplet data for Norwegian health retrieval
+# 
+# Key Changes from Previous Config:
+# - Uses triplet dataset with hard negatives (330K samples)
+# - TripletLoss instead of MultipleNegativesRankingLoss
+# - Single dataset focus (ETI only)
+# - Optimized for hard negative contrastive learning
+#
+# Expected Performance:
+# - Better hard negative discrimination
+# - Improved precision on difficult queries
+# - More robust embedding space
+# =============================================================================
+
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  model_name: "google/embeddinggemma-300m"
+  max_seq_length: 2048  # Match ETI dataset max length
+  embedding_dimension: 768
+
+# DATASET CONFIGURATION  
+# =============================================================================
+dataset:
+  # ETI Triplet Dataset (Primary)
+  use_eti_triplets: true      # NEW: Use triplet version with hard negatives
+  use_eti: false              # Disable regular ETI pairs dataset
+  
+  # Other datasets (disabled for pure triplet experiment)
+  use_norquad: false
+  use_scandiqa: false  
+  use_supervised_da: false
+  use_ddsc: false
+  
+  # Dataset-specific settings
+  scandiqa_languages: ["no", "da", "sv"]
+
+# TRAINING CONFIGURATION
+# =============================================================================
+training:
+  output_dir: "models/embeddinggemma-300m-triplet-adapted"
+  
+  # EPOCHS & SCHEDULING
+  # Start conservative since triplet loss can be more aggressive than MNRL
+  num_train_epochs: 1.0       # Single epoch first to test triplet effectiveness
+  
+  # BATCH SIZES - Optimized for H100 96GB with gradient checkpointing
+  per_device_train_batch_size: 16    # Reduced from 64 to avoid OOM
+  per_device_eval_batch_size: 32    # Reduced for evaluation
+  
+  # LEARNING RATE
+  # Adjusted for batch size 32
+  learning_rate: 0.000005     # 5e-6 - balanced for batch size 32
+  warmup_ratio: 0.1           # 10% warmup
+  lr_scheduler_type: "linear" # Linear decay
+
+  # LOSS CONFIGURATION
+  # NEW: Triplet loss configuration
+  loss_function: "TripletLoss"           # Use TripletLoss instead of MNRL
+  triplet_margin: 0.5                   # Distance margin for triplet loss
+  distance_metric: "cosine"             # Cosine distance (default for embeddings)
+
+  # WEIGHT DECAY
+  weight_decay: 0.01
+
+  # GRADIENT & OPTIMIZATION
+  gradient_accumulation_steps: 1  # No accumulation - we have enough VRAM
+  max_grad_norm: 1.0             # Gradient clipping
+  
+  # EVALUATION
+  eval_strategy: "steps"
+  eval_steps: 250               # More frequent evaluation for triplet monitoring
+  
+  # SAVING
+  save_strategy: "steps" 
+  save_steps: 250               # Align with eval_steps
+  save_total_limit: 3           # Keep 3 checkpoints
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_dev_cosine_ndcg@10"
+  greater_is_better: true
+  
+  # LOGGING
+  logging_steps: 50
+  logging_dir: null
+  report_to: []
+
+  # PERFORMANCE  
+  fp16: false
+  bf16: true
+  dataloader_num_workers: 1    # Parallel data loading (4-8 recommended for H100)
+
+# HARDWARE OPTIMIZATION
+# =============================================================================
+hardware:
+  device: "cuda"                  # "cuda", "mps", "cpu", or "auto" for auto-detect
+  gradient_checkpointing: true    # Required to fit in memory
+  tf32: true                      # ~3x faster FP32 matmuls on Ampere+ GPUs (A100, H100)
+  distributed: true               # Enable for 2x H100
+  world_size: 2                   # Number of GPUs
+
+# EXPERIMENT TRACKING (Optional)
+# =============================================================================
+experiment_tracking:
+  use_mlflow: true
+  report_to: ["tensorboard", "mlflow"]  # Enable both TensorBoard and MLflow
+  mlflow_tracking_uri: "file:./mlruns"  # Local file-based tracking
+  mlflow_experiment_name: "embeddinggemma-triplet-adaptation"
+  mlflow_run_name: "embeddinggemma-300m-norwegian-health-triplet-v1"
+
+# ADVANCED OPTIONS (Optional)
+# =============================================================================
+advanced:
+  push_to_hub: true
+  hub_model_id: "thivy/embeddinggemma-300m-norwegian-health-triplet-v1"  # Different name for triplet version
+  hub_strategy: "end"  # Push only at end of training
+  hub_token: null      # Set HF_TOKEN env var
+  hub_private_repo: false
+
+# EVALUATION CONFIGURATION
+# =============================================================================
+evaluation:
+  # Use TripletEvaluator for triplet-specific evaluation
+  evaluator_type: "TripletEvaluator"
+  
+  # Also run InformationRetrievalEvaluator for comparison with previous results
+  include_ir_evaluation: true
+  
+  # Test set evaluation
+  run_test_evaluation: true

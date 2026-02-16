@@ -1,0 +1,143 @@
+# ============================================================================
+# EMBEDDING MODEL FINE-TUNING CONFIGURATION - DOMAIN ADAPTATION
+# ============================================================================
+# Domain adaptation for EmbeddingGemma-300M on Norwegian health/welfare data.
+# The base model is ALREADY a strong retriever — we're adapting it to:
+# 1. Norwegian language specifics
+# 2. Health/welfare domain vocabulary (ETI data)
+# 3. New retrieval patterns not in pre-training
+#
+# Strategy: Conservative finetuning
+# - Lower learning rate (5e-6 vs 2e-5 for full training)
+# - Shorter training (0.5-1 epochs to avoid overfitting)
+# - Focus on domain data (ETI) with supporting datasets
+# ============================================================================
+
+# MODEL CONFIGURATION
+# ----------------------------------------------------------------------------
+model:
+  name: "google/embeddinggemma-300m"  # Google's EmbeddingGemma model (300M params)
+  max_seq_length: 2048  # Max sequence length (standard for embeddings)
+
+# DATASET CONFIGURATION
+# ----------------------------------------------------------------------------
+dataset:
+  # Main dataset type
+  name: "retrieval-qa-combined"
+  
+  # Column names (all datasets will be converted to this format)
+  anchor_column: "anchor"      # The query/question
+  positive_column: "positive"  # The relevant document/passage
+  
+  # ETI dataset (domain dataset - Norwegian health/welfare)
+  use_eti: true
+  
+  # Additional retrieval datasets to include
+  use_norquad: true         # Norwegian Wikipedia QA (~3.8K)
+  use_scandiqa: true        # Scandinavian extractive QA (~18.9K NO/DA/SV)
+  use_supervised_da: true   # Danish Wikipedia queries (~93K)
+  
+  # ScandiQA language filter
+  scandiqa_languages: ['no', 'da', 'sv']  # Norwegian, Danish, Swedish
+  
+  # DDSC dataset — DISABLED
+  # DDSC is LLM-generated synthetic data (gemma-2-27b-it). Already used to train
+  # EmbeddingGemma-Scandi-300m (same base model + same loss + same hyperparams).
+  # Training on it again is redundant. Focus on real domain data (ETI) instead.
+  use_ddsc: false
+  ddsc_languages: ['norwegian', 'danish', 'swedish']
+  ddsc_tasks: ['retrieval', 'unit-triple']
+
+# TRAINING HYPERPARAMETERS
+# ----------------------------------------------------------------------------
+training:
+  # OUTPUT DIRECTORY
+  output_dir: "models/embeddinggemma-300m-domain-adapted"
+
+  # LOSS FUNCTION
+  # CachedMultipleNegativesRankingLoss uses gradient caching to simulate larger
+  # batch sizes (more in-batch negatives) without increasing GPU memory.
+  # Set mini_batch_size < per_device_train_batch_size to enable it.
+  # If mini_batch_size is not set, falls back to standard MNRL.
+  loss_function: "CachedMultipleNegativesRankingLoss"
+  mini_batch_size: 32  # Process 32 samples at a time, but contrast against full batch
+
+  # BATCH SIZE
+  # With CachedMNRL, this is the EFFECTIVE batch size for contrastive learning.
+  # Increased to 64 with 11% GPU usage — plenty of headroom for stronger negatives
+  # Larger batches = more in-batch negatives = stronger contrastive signal
+  per_device_train_batch_size: 64  # Doubled for better in-batch negatives
+  per_device_eval_batch_size: 64
+
+  # TRAINING DURATION
+  num_train_epochs: 1  # Short training: 0.5 epoch ≈ 290K samples (avoid overfitting)
+
+  # LEARNING RATE
+  # Domain adaptation: use LOWER learning rate than full training
+  # Full training: 2e-5 | Domain adaptation: 5e-6 (conservative)
+  learning_rate: 0.000005  # 5e-6 Conservative: small steps to avoid catastrophic forgetting
+  warmup_ratio: 0.1        # 10% warmup
+
+  # WEIGHT DECAY
+  weight_decay: 0.01
+
+  # LEARNING RATE SCHEDULER
+  lr_scheduler_type: "linear"  # Linear decay
+
+  # EVALUATION
+  eval_strategy: "steps"
+  eval_steps: 250  # Evaluate more frequently for early stopping
+  
+  # EARLY STOPPING (Optional)
+  # Uncomment to stop if NDCG doesn't improve for 2 evals
+  # early_stopping_patience: 2
+
+  # SAVING
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 2  # Keep only 2 best checkpoints
+  load_best_model_at_end: true
+
+  # LOGGING
+  logging_steps: 50
+  logging_dir: "models/embeddinggemma-300m-domain-adapted/logs"
+
+  # PERFORMANCE
+  fp16: false  # Use bf16 instead for better stability
+  bf16: true   # Brain float 16 - better for training stability
+  gradient_accumulation_steps: 1
+
+  # REPRODUCIBILITY
+  seed: 42
+
+# EVALUATION CONFIGURATION
+# ----------------------------------------------------------------------------
+evaluation:
+  metric_for_best_model: "eval_dev_cosine_ndcg@10"  # NDCG@10 for retrieval (cosine similarity)
+  greater_is_better: true
+
+# HARDWARE CONFIGURATION
+# ----------------------------------------------------------------------------
+hardware:
+  device: "cuda"                  # "cuda", "mps", "cpu", or "auto" for auto-detect
+  gradient_checkpointing: true    # Trade compute for memory — enables larger batch sizes
+  tf32: true                      # ~3x faster FP32 matmuls on Ampere+ GPUs (A100, H100)
+  distributed: true               # Enable distributed training
+  world_size: 1                   # Number of GPUs (1 = single GPU)
+
+# EXPERIMENT TRACKING (Optional)
+# ----------------------------------------------------------------------------
+experiment_tracking:
+  use_mlflow: false
+  report_to: []  # e.g., ["tensorboard", "mlflow"]
+  mlflow_experiment_name: "embeddinggemma-domain-adaptation"
+  mlflow_run_name: "embeddinggemma-300m-norwegian-health-domain"
+
+# ADVANCED OPTIONS (Optional)
+# ----------------------------------------------------------------------------
+advanced:
+  push_to_hub: true
+  hub_model_id: "thivy/embeddinggemma-300m-norwegian-health"  # Your HF username/repo
+  hub_strategy: "end"  # Push only at end of training (or "every_save" for checkpoints too)
+  hub_token: null      # Set HF_TOKEN env var, or paste token here (NOT recommended for security)
+  hub_private_repo: false  # Set to true if you want it private
