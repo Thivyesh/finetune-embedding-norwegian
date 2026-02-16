@@ -217,6 +217,7 @@ def compute_metrics(
         "accuracy@3": 0.0,
         "accuracy@5": 0.0,
         "accuracy@10": 0.0,
+        "precision@10": 0.0,
         "recall@10": 0.0,
         "recall@50": 0.0,
         "recall@100": 0.0,
@@ -254,6 +255,11 @@ def compute_metrics(
             top_k = set(ranked_docs[:k])
             recall = len(top_k & rel_docs) / len(rel_docs)
             metrics[f"recall@{k}"] += recall / num_queries
+        
+        # Precision@10
+        top_10 = set(ranked_docs[:10])
+        precision_10 = len(top_10 & rel_docs) / 10
+        metrics["precision@10"] += precision_10 / num_queries
         
         # MRR@10
         for rank, doc_id in enumerate(ranked_docs[:10], 1):

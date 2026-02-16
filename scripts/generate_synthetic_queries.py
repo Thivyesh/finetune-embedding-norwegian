@@ -320,13 +320,14 @@ def main():
     # eti_train.jsonl og eti_test.jsonl skal inneholde dokumentene som skal brukes for henholdsvis train og test. Disse må legges i data/raw/ før kjøring.
     TRAIN_FILE = RAW_DIR / "eti_train.jsonl"
     TEST_FILE = RAW_DIR / "eti_test.jsonl"
-    TRAIN_OUTPUT = PROCESSED_DIR / "eti_train_smpl.json"
-    TEST_OUTPUT = PROCESSED_DIR / "eti_test_smpl.json"
+    TRAIN_OUTPUT = PROCESSED_DIR / "eti_train_smpl_2048.json"
+    TEST_OUTPUT = PROCESSED_DIR / "eti_test_smpl_2048.json"
     
     # LlamaIndex konfigurasjon
     NUM_QUESTIONS_PER_CHUNK = 20  # Antall spørsmål per chunk
     
     # Chunking konfigurasjon (valgfritt)
+
 
     CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "4000"))
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))

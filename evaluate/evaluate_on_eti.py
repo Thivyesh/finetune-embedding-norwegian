@@ -16,12 +16,47 @@ from typing import Dict
 
 from sentence_transformers import SentenceTransformer
 from sentence_transformers.evaluation import InformationRetrievalEvaluator
+from transformers import AutoConfig, PreTrainedModel
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+# Patch PreTrainedModel.initialize_weights to handle bias=None
+_original_initialize_weights = PreTrainedModel.initialize_weights
+
+
+def _patched_initialize_weights(self):
+    try:
+        return _original_initialize_weights(self)
+    except AttributeError as e:
+        if "'NoneType' object has no attribute 'data'" in str(e):
+            logger.warning(f"Skipping weight initialization due to layers with bias=None")
+            return
+        raise
+
+
+PreTrainedModel.initialize_weights = _patched_initialize_weights
+
+
+# Patch AutoConfig.from_pretrained to add missing attributes
+_original_from_pretrained = AutoConfig.from_pretrained
+
+
+@classmethod
+def _patched_from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+    config = _original_from_pretrained(pretrained_model_name_or_path, **kwargs)
+    if not hasattr(config, 'is_decoder'):
+        config.is_decoder = False
+    if not hasattr(config, 'add_cross_attention'):
+        config.add_cross_attention = False
+    return config
+
+
+AutoConfig.from_pretrained = _patched_from_pretrained
 
 
 def load_eti_test(dataset_type: str = "smpl") -> Dict:
@@ -92,7 +127,7 @@ def evaluate_model(model_path: str, dataset_type: str = "smpl") -> Dict:
         Dict with evaluation metrics
     """
     logger.info(f"Loading model: {model_path}")
-    model = SentenceTransformer(model_path)
+    model = SentenceTransformer(model_path, trust_remote_code=True)
     
     # Load test data
     test_data = load_eti_test(dataset_type)
